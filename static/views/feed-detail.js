@@ -107,6 +107,7 @@ async function _refreshFeedStats() {
       ? `Last checked ${fmtDateTime(updated.last_checked)}`
       : "Never checked";
   }
+  window._feedDetailDL?.refresh();
   return updated;
 }
 
