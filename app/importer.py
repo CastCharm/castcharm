@@ -61,7 +61,7 @@ def _read_xml_sidecar(audio_path: str) -> dict:
             "link":           _t("link"),
         }.items() if v is not None}
     except Exception as e:
-        log.debug("XML sidecar parse error %s: %s", xml_path, e)
+        log.warning("XML sidecar parse error %s: %s", xml_path, e)
         return {}
 
 
@@ -94,7 +94,7 @@ def _read_id3_tags(audio_path: str) -> dict:
 
         return {k: v for k, v in result.items() if v is not None}
     except Exception as e:
-        log.debug("Tag read error %s: %s", audio_path, e)
+        log.warning("Tag read error %s: %s", audio_path, e)
         return {}
 
 

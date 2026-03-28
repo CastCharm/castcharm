@@ -141,7 +141,7 @@ def _ensure_workers() -> None:
             )
             t.start()
             _workers.append(t)
-            log.debug("Download worker thread started (%d/%d)", len(_workers), target)
+
 
 
 def enqueue_download(episode_id: int) -> None:  # noqa: ARG001
@@ -312,7 +312,7 @@ def _download_image(url: str, dest_path: str) -> None:
             with open(dest_path, "wb") as f:
                 f.write(r.content)
     except Exception as e:
-        log.debug("Could not download image %s: %s", url, e)
+        log.warning("Could not download image %s: %s", url, e)
 
 
 def _normalize_title(title: str) -> str:
@@ -579,7 +579,7 @@ def download_episode(episode_id: int, db: Session) -> None:
                 from app.id3_tagger import extract_embedded_cover
                 extract_embedded_cover(target_path, ep_art_path)
             except Exception as emb_err:
-                log.debug("Could not extract embedded cover for episode %d: %s", episode_id, emb_err)
+                log.warning("Could not extract embedded cover for episode %d: %s", episode_id, emb_err)
 
         # Write XML sidecar
         if save_xml:
