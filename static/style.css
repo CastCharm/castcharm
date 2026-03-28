@@ -2143,3 +2143,33 @@ body.has-player #content { padding-bottom: 80px; }
 .dir-entry:hover { background: var(--bg-3); color: var(--text); }
 .dir-icon { font-size: 14px; flex-shrink: 0; }
 .dir-up { color: var(--text-3); font-style: italic; }
+
+/* ── Timezone combobox ───────────────────────────────────────────────────── */
+.tz-combo { position: relative; }
+
+.tz-dropdown {
+  display: none;
+  position: absolute;
+  left: 0; right: 0;
+  top: calc(100% + 3px);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  max-height: 240px;
+  overflow-y: auto;
+  z-index: 200;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
+}
+.tz-dropdown.open { display: block; }
+
+.tz-option {
+  padding: 9px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.08s;
+}
+.tz-option:hover,
+.tz-option.tz-highlighted {
+  background: var(--primary-light);
+  color: var(--primary);
+}

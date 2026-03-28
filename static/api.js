@@ -57,10 +57,12 @@ const API = {
   delete: (p)    => API.request("DELETE", p),
 
   // ── Settings ────────────────────────────────────────────────
-  getSettings:  () =>  API.get("/api/settings"),
-  putSettings:  (b) => API.put("/api/settings", b),
-  getID3Tags:   () =>  API.get("/api/settings/id3-tags"),
-  getRSSSources: () => API.get("/api/settings/rss-sources"),
+  getSettings:      () =>  API.get("/api/settings"),
+  putSettings:      (b) => API.put("/api/settings", b),
+  getID3Tags:       () =>  API.get("/api/settings/id3-tags"),
+  getRSSSources:    () =>  API.get("/api/settings/rss-sources"),
+  getServerTimezone: () => API.get("/api/settings/server-timezone"),
+  getTimezones:     () =>  API.get("/api/settings/timezones"),
   getLogs: (limit = 500, level = null) => {
     const p = new URLSearchParams({ limit });
     if (level) p.set("level", level);

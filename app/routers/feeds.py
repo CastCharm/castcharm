@@ -1150,7 +1150,7 @@ async def import_feed_xml(
 
         # Recalculate seq numbers and check if any downloaded files need renaming
         from app.routers.episodes import recalc_seq_numbers
-        primary_id = feed.parent_feed_id or feed.id
+        primary_id = feed.primary_feed_id or feed.id
         recalc_seq_numbers(primary_id, db)
         db.commit()
 

@@ -24,6 +24,7 @@ class GlobalSettingsBase(BaseModel):
     auto_played_threshold: int = 95
     theme: str = "midnight"
     show_suggested_listening: bool = True
+    timezone: str = "UTC"
 
 
 class GlobalSettingsUpdate(BaseModel):
@@ -43,6 +44,7 @@ class GlobalSettingsUpdate(BaseModel):
     auto_played_threshold: Optional[int] = None
     theme: Optional[str] = None
     show_suggested_listening: Optional[bool] = None
+    timezone: Optional[str] = None
 
 
 class GlobalSettingsOut(GlobalSettingsBase):

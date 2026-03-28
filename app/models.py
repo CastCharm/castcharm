@@ -42,6 +42,8 @@ class GlobalSettings(Base):
     auth_enabled = Column(Boolean, default=False)
     auth_username = Column(String, nullable=True)
     auth_password_hash = Column(String, nullable=True)
+    # IANA timezone name used for filename date formatting and year folders
+    timezone = Column(String, default="UTC")
 
 
 class AuthSession(Base):

@@ -77,6 +77,7 @@ function _startApp() {
     localStorage.setItem("cc_theme", theme);
     applyTheme(theme);
     Player.setThreshold(s.auto_played_threshold ?? 95);
+    window._appTimezone = s.timezone || "UTC";
     // Show/hide logout button based on auth state
     _updateAuthNav(s);
   }).catch(() => {});

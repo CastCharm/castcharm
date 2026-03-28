@@ -189,6 +189,18 @@ async function viewSettings() {
             </svg>
           </div>
           <div class="panel-body">
+            <div class="form-group">
+              <label class="form-label">Timezone</label>
+              <div class="tz-combo">
+                <input class="form-control" type="text" id="settings-tz-input"
+                       autocomplete="off" spellcheck="false"
+                       value="${escHTML(settings.timezone || "UTC")}"
+                       placeholder="Search timezones…" />
+                <div class="tz-dropdown" id="settings-tz-dropdown"></div>
+              </div>
+              <div class="form-hint" style="margin-top:4px">Used for date prefixes in filenames and year-based folder organization.</div>
+            </div>
+
             ${toggle("Date prefix in filename (YYYY-MM-DD)", "filename_date_prefix",
               settings.filename_date_prefix,
               "Prepends the episode publication date to every filename.")}
@@ -335,6 +347,9 @@ async function viewSettings() {
 
   const form = document.getElementById("global-settings-form");
 
+  // Populate timezone selector
+  _initSettingsTzSelect(settings.timezone || "UTC");
+
   // Dirty tracking — reset on each visit, set on any change
   window._settingsDirty = false;
   form.addEventListener("change", () => { window._settingsDirty = true; });
@@ -363,6 +378,7 @@ async function viewSettings() {
       keep_unplayed: raw.keep_unplayed ?? true,
       auto_played_threshold: Number(raw.auto_played_threshold) ?? 95,
       show_suggested_listening: raw.show_suggested_listening ?? true,
+      timezone: document.getElementById("settings-tz-input")?.value || "UTC",
     };
     try {
       await API.putSettings(payload);
@@ -381,6 +397,23 @@ async function viewSettings() {
     await window._settingsSave();
   });
 
+}
+
+// ── Timezone selector ────────────────────────────────────────────────────────
+
+async function _initSettingsTzSelect(current) {
+  const inputEl    = document.getElementById("settings-tz-input");
+  const dropdownEl = document.getElementById("settings-tz-dropdown");
+  if (!inputEl || !dropdownEl) return;
+  try {
+    const tzData = await API.getTimezones();
+    const allZones = (tzData.timezones || []).sort();
+    initTzCombo(inputEl, dropdownEl, allZones, current, (val) => {
+      window._settingsDirty = true;
+    });
+  } catch (_) {
+    // If fetch fails, the input still shows the current value and can be edited manually
+  }
 }
 
 // ── Security panel helpers ───────────────────────────────────────────────────

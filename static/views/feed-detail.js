@@ -104,7 +104,7 @@ async function _refreshFeedStats() {
   const lastChecked = document.querySelector(".feed-last-checked");
   if (lastChecked) {
     lastChecked.textContent = updated.last_checked
-      ? `Last checked ${new Date(updated.last_checked + "Z").toLocaleString(undefined, {year:"numeric",month:"short",day:"numeric",hour:"2-digit",minute:"2-digit",second:"2-digit"})}`
+      ? `Last checked ${fmtDateTime(updated.last_checked)}`
       : "Never checked";
   }
   return updated;
@@ -328,7 +328,7 @@ async function viewFeedDetail(feedId) {
           <div class="feed-header-author">${feed.author || ""}</div>
           <div class="feed-last-checked">
             ${feed.last_checked
-              ? `Last checked ${new Date(feed.last_checked + "Z").toLocaleString(undefined, {year:"numeric",month:"short",day:"numeric",hour:"2-digit",minute:"2-digit",second:"2-digit"})}`
+              ? `Last checked ${fmtDateTime(feed.last_checked)}`
               : "Never checked"}
           </div>
           <div class="feed-header-stats">

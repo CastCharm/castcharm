@@ -51,15 +51,39 @@ document.getElementById("modal-overlay").addEventListener("click", (e) => {
 // ============================================================
 // Utilities
 // ============================================================
+// All datetimes from the API are naive UTC strings without a timezone suffix.
+// _utcDate() appends "Z" so JS parses them correctly as UTC rather than local time.
+function _utcDate(date) {
+  if (!date) return null;
+  if (date instanceof Date) return date;
+  return new Date(date.includes("Z") || date.includes("+") ? date : date + "Z");
+}
+
 // fmt renders a date string.  When isApproximate is true we wrap the value in a
 // dotted underline with a tooltip explaining that the date was inferred rather than
 // read from metadata — this happens for files imported without ID3 date tags.
 function fmt(date, isApproximate) {
   if (!date) return "—";
-  const d = typeof date === "string" ? new Date(date) : date;
-  const s = d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  const d = _utcDate(date);
+  if (!d || isNaN(d)) return "—";
+  const s = d.toLocaleDateString(undefined, {
+    year: "numeric", month: "short", day: "numeric",
+    timeZone: window._appTimezone || "UTC",
+  });
   if (!isApproximate) return s;
   return `<span title="Approximate date — no date metadata found in this file. Set a date in the ID3 tags to resolve this." style="border-bottom:1px dashed var(--text-2);cursor:help">${s}~</span>`;
+}
+
+// fmtDateTime renders a date+time string in the configured server timezone.
+function fmtDateTime(date) {
+  if (!date) return "—";
+  const d = _utcDate(date);
+  if (!d || isNaN(d)) return "—";
+  return d.toLocaleString(undefined, {
+    year: "numeric", month: "short", day: "numeric",
+    hour: "2-digit", minute: "2-digit",
+    timeZone: window._appTimezone || "UTC",
+  });
 }
 
 function fmtBytes(bytes) {
@@ -72,7 +96,8 @@ function fmtBytes(bytes) {
 
 function timeAgo(date) {
   if (!date) return "never";
-  const d = typeof date === "string" ? new Date(date) : date;
+  const d = _utcDate(date);
+  if (!d || isNaN(d)) return "never";
   const diff = (Date.now() - d.getTime()) / 1000;
   if (diff < 60) return "just now";
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
@@ -229,6 +254,77 @@ function escJS(s) {
 }
 
 // ── Shared "Sync All Feeds" button wiring ───────────────────────────────────
+
+// ── Timezone combobox ─────────────────────────────────────────────────────────
+// initTzCombo(inputEl, dropdownEl, allZones, initialValue, onChange)
+// Wires a text input + dropdown div into a searchable timezone picker.
+function initTzCombo(inputEl, dropdownEl, allZones, initialValue, onChange) {
+  let current = initialValue;
+  inputEl.value = current;
+
+  const renderList = (zones) => {
+    dropdownEl.innerHTML = zones.map(z =>
+      `<div class="tz-option${z === current ? " tz-highlighted" : ""}" data-tz="${escHTML(z)}">${escHTML(z)}</div>`
+    ).join("") || `<div class="tz-option" style="color:var(--text-3);cursor:default">No matches</div>`;
+    dropdownEl.querySelector(".tz-highlighted")?.scrollIntoView({ block: "nearest" });
+  };
+
+  const openWith = (query) => {
+    const q = query.toLowerCase();
+    const filtered = q ? allZones.filter(z => z.toLowerCase().includes(q)) : allZones;
+    renderList(filtered);
+    dropdownEl.classList.add("open");
+  };
+
+  const commit = (value) => {
+    if (!allZones.includes(value)) return;
+    current = value;
+    inputEl.value = value;
+    dropdownEl.classList.remove("open");
+    onChange(value);
+  };
+
+  inputEl.addEventListener("focus",  () => openWith(inputEl.value === current ? "" : inputEl.value));
+  inputEl.addEventListener("input",  () => openWith(inputEl.value));
+  inputEl.addEventListener("blur",   () => setTimeout(() => {
+    dropdownEl.classList.remove("open");
+    inputEl.value = current; // restore if user typed something invalid
+  }, 160));
+
+  dropdownEl.addEventListener("mousedown", (e) => {
+    const opt = e.target.closest(".tz-option[data-tz]");
+    if (opt) commit(opt.dataset.tz);
+  });
+
+  inputEl.addEventListener("keydown", (e) => {
+    const isOpen = dropdownEl.classList.contains("open");
+    if (!isOpen && (e.key === "ArrowDown" || e.key === "Enter")) {
+      openWith(""); return;
+    }
+    if (!isOpen) return;
+    const opts = [...dropdownEl.querySelectorAll(".tz-option[data-tz]")];
+    const hi = dropdownEl.querySelector(".tz-highlighted");
+    const idx = hi ? opts.indexOf(hi) : -1;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      opts.forEach(o => o.classList.remove("tz-highlighted"));
+      (opts[idx + 1] ?? opts[0])?.classList.add("tz-highlighted");
+      dropdownEl.querySelector(".tz-highlighted")?.scrollIntoView({ block: "nearest" });
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      opts.forEach(o => o.classList.remove("tz-highlighted"));
+      (opts[idx - 1] ?? opts[opts.length - 1])?.classList.add("tz-highlighted");
+      dropdownEl.querySelector(".tz-highlighted")?.scrollIntoView({ block: "nearest" });
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const active = dropdownEl.querySelector(".tz-highlighted[data-tz]");
+      if (active) commit(active.dataset.tz);
+    } else if (e.key === "Escape") {
+      dropdownEl.classList.remove("open");
+      inputEl.value = current;
+    }
+  });
+}
 
 function wireSyncAllBtn(selector) {
   document.querySelector(selector)?.addEventListener("click", async (e) => {
