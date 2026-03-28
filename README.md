@@ -5,6 +5,8 @@ A self-hosted podcast manager with a clean web UI. Subscribe to RSS feeds, auto-
 ![License](https://img.shields.io/github/license/ryanboyd/castcharm)
 ![Docker Image](https://img.shields.io/github/actions/workflow/status/ryanboyd/castcharm/docker.yml?label=docker%20build)
 
+Disclosure: GenAI is being used during development.
+
 ---
 
 ## Features
