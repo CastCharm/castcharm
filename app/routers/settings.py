@@ -92,6 +92,22 @@ def update_settings(body: GlobalSettingsUpdate, db: Session = Depends(get_db)):
     if "max_concurrent_downloads" in updates:
         from app import downloader as _dl
         _dl._cached_max_concurrent = None  # force re-read on next enqueue
+    # Reschedule cron jobs when schedule-related settings change
+    _schedule_fields = {
+        "scheduled_xml_enabled", "scheduled_xml_time",
+        "scheduled_opml_enabled", "scheduled_opml_time",
+        "scheduled_sync_enabled", "scheduled_sync_time",
+        "timezone",
+    }
+    changed = set(updates.keys())
+    if changed & _schedule_fields:
+        from app.scheduler import schedule_xml_regen, schedule_opml_export, schedule_daily_sync
+        if changed & {"scheduled_xml_enabled", "scheduled_xml_time", "timezone"}:
+            schedule_xml_regen()
+        if changed & {"scheduled_opml_enabled", "scheduled_opml_time", "timezone"}:
+            schedule_opml_export()
+        if changed & {"scheduled_sync_enabled", "scheduled_sync_time", "timezone"}:
+            schedule_daily_sync()
     log.info("Settings updated: %s", ", ".join(updates.keys()))
     return settings
 
@@ -104,6 +120,46 @@ def get_logs(
     """Return recent application log entries from the in-memory buffer."""
     from app.log_buffer import get_logs as _get_logs  # inline: circular import avoidance
     return _get_logs(limit=limit, min_level=level)
+
+
+@router.get("/server-timezone")
+def get_server_timezone():
+    """Detect the server's IANA timezone — used to pre-fill the setup wizard."""
+    import os
+    from zoneinfo import available_timezones
+    known = available_timezones()
+
+    # 1. TZ env var — the standard Docker/docker-compose mechanism
+    tz_env = os.environ.get("TZ", "").strip()
+    if tz_env and tz_env in known:
+        return {"timezone": tz_env}
+
+    # 2. /etc/localtime symlink (present when system tzdata is installed)
+    try:
+        link = os.readlink("/etc/localtime")
+        tz_name = link.split("/zoneinfo/", 1)[-1]
+        if tz_name and tz_name in known:
+            return {"timezone": tz_name}
+    except OSError:
+        pass
+
+    # 3. Python's local timezone (works when tzdata pkg is installed)
+    try:
+        import datetime
+        local_tz = datetime.datetime.now(datetime.timezone.utc).astimezone().tzinfo
+        if hasattr(local_tz, "key") and local_tz.key in known:
+            return {"timezone": local_tz.key}
+    except Exception:
+        pass
+
+    return {"timezone": "UTC"}
+
+
+@router.get("/timezones")
+def list_timezones():
+    """Return all available IANA timezone names as a flat sorted list."""
+    from zoneinfo import available_timezones
+    return {"timezones": sorted(available_timezones())}
 
 
 @router.get("/id3-tags", response_model=list[ID3TagInfo])

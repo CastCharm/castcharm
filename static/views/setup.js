@@ -6,12 +6,13 @@
 
 const _setupState = {
   step: 1,
-  totalSteps: 4,
+  totalSteps: 5,
   enableAuth: false,
   username: "",
   password: "",
   confirmPassword: "",
   theme: "midnight",
+  timezone: "UTC",
   downloadPath: "/downloads",
   filenameDatePrefix: true,
   filenameEpisodeNumber: true,
@@ -82,15 +83,17 @@ function _renderSetupStep() {
   document.getElementById("wiz-back")?.addEventListener("click", _wizardBack);
 
   if (s.step === 1) _initLoginStep();
-  if (s.step === 3) _loadDirBrowser(s.downloadPath);
+  if (s.step === 3) _initTimezoneStep();
+  if (s.step === 4) _loadDirBrowser(s.downloadPath);
 }
 
 function _stepBody(step) {
   switch (step) {
     case 1: return _stepLogin();
     case 2: return _stepTheme();
-    case 3: return _stepStorage();
-    case 4: return _stepFileOptions();
+    case 3: return _stepTimezone();
+    case 4: return _stepStorage();
+    case 5: return _stepFileOptions();
     default: return "";
   }
 }
@@ -153,7 +156,56 @@ window._wizardSelectTheme = function(name) {
   });
 };
 
-// ── Step 3: Storage ────────────────────────────────────────────────────────
+// ── Step 3: Timezone ───────────────────────────────────────────────────────
+
+function _stepTimezone() {
+  return `
+    <h2 class="wiz-title">Timezone</h2>
+    <p class="wiz-desc">
+      Set the timezone for this server. It's used for date prefixes in filenames
+      and year-based folder organization.
+    </p>
+    <div class="form-group">
+      <label class="form-label">Timezone</label>
+      <div class="tz-combo">
+        <input class="form-control" type="text" id="tz-input"
+               autocomplete="off" spellcheck="false"
+               value="${escHTML(_setupState.timezone)}"
+               placeholder="Search timezones…" />
+        <div class="tz-dropdown" id="tz-dropdown"></div>
+      </div>
+      <div class="form-hint" id="tz-hint" style="margin-top:6px"></div>
+    </div>`;
+}
+
+async function _initTimezoneStep() {
+  try {
+    const [tzData, serverTz] = await Promise.all([
+      API.getTimezones(),
+      API.getServerTimezone(),
+    ]);
+    const allZones = (tzData.timezones || []).sort();
+    if (!_setupState._tzChosen) {
+      _setupState.timezone = serverTz.timezone || "UTC";
+    }
+    const hint = document.getElementById("tz-hint");
+    if (hint) hint.textContent = `Detected from server: ${serverTz.timezone || "UTC"}`;
+
+    const inputEl    = document.getElementById("tz-input");
+    const dropdownEl = document.getElementById("tz-dropdown");
+    if (inputEl && dropdownEl) {
+      initTzCombo(inputEl, dropdownEl, allZones, _setupState.timezone, (val) => {
+        _setupState.timezone = val;
+        _setupState._tzChosen = true;
+      });
+    }
+  } catch (_) {
+    const hint = document.getElementById("tz-hint");
+    if (hint) hint.textContent = "Could not load timezone list — you can update this in Settings.";
+  }
+}
+
+// ── Step 4: Storage ────────────────────────────────────────────────────────
 
 function _stepStorage() {
   return `
@@ -281,11 +333,11 @@ async function _wizardNext() {
     }
   }
 
-  if (_setupState.step === 3) {
+  if (_setupState.step === 4) {
     _setupState.downloadPath = (document.getElementById("wiz-dl-path")?.value || "/downloads").trim();
   }
 
-  if (_setupState.step === 4) {
+  if (_setupState.step === 5) {
     const form = document.getElementById("wiz-file-form");
     if (form) {
       const raw = collectForm(form);
@@ -305,6 +357,7 @@ async function _wizardNext() {
         username:                _setupState.enableAuth ? _setupState.username  : null,
         password:                _setupState.enableAuth ? _setupState.password  : null,
         theme:                   _setupState.theme,
+        timezone:                _setupState.timezone,
         download_path:           _setupState.downloadPath,
         filename_date_prefix:    _setupState.filenameDatePrefix,
         filename_episode_number: _setupState.filenameEpisodeNumber,

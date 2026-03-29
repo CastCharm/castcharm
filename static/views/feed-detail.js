@@ -104,9 +104,10 @@ async function _refreshFeedStats() {
   const lastChecked = document.querySelector(".feed-last-checked");
   if (lastChecked) {
     lastChecked.textContent = updated.last_checked
-      ? `Last checked ${new Date(updated.last_checked + "Z").toLocaleString(undefined, {year:"numeric",month:"short",day:"numeric",hour:"2-digit",minute:"2-digit",second:"2-digit"})}`
+      ? `Last checked ${fmtDateTime(updated.last_checked)}`
       : "Never checked";
   }
+  window._feedDetailDL?.refresh();
   return updated;
 }
 
@@ -192,25 +193,57 @@ function _buildDlBtnHtml(feed, queueCount = 0) {
   const caretToggle = `const w=this.closest('.ep-more-wrap');w.toggleAttribute('data-open');document.querySelectorAll('.ep-more-wrap[data-open]').forEach(el=>el!==w&&el.removeAttribute('data-open'))`;
   const caret = svg('<polyline points="6 9 12 15 18 9"/>');
 
-  // Build the download button(s) — always shown and always clickable.
+  // Build the download button(s).
+  const hasAvailable = feed?.available_count > 0;
+  const hasUnplayed  = feed?.unplayed_available_count > 0;
+  const activeDownloads = queueCount > 0;
+
   let btnHtml = "";
-  if (feed && feed.available_count > 0) {
-    if (feed.unplayed_available_count > 0) {
+  if (hasUnplayed) {
+    // Active split button: "Download Unplayed" primary + "Download All" in dropdown
+    btnHtml = `<div class="ep-more-wrap" onclick="event.stopPropagation()">
+      <button class="btn btn-primary btn-sm btn-split-main" id="btn-dl-unplayed-feed">
+        ${dlIcon} Download Unplayed (${feed.unplayed_available_count})
+      </button>
+      <button class="btn btn-primary btn-sm btn-split-caret" onclick="${caretToggle}">${caret}</button>
+      <div class="ep-more-dropdown" style="right:0;left:auto;min-width:190px">
+        <button id="btn-dl-unplayed-feed-dd">Download Unplayed (${feed.unplayed_available_count})</button>
+        <button id="btn-dl-all-feed">Download All (${feed.available_count})</button>
+      </div>
+    </div>`;
+  } else if (hasAvailable) {
+    if (activeDownloads) {
+      // Unplayed all queued; played episodes still pending — disabled unplayed + active download-all
       btnHtml = `<div class="ep-more-wrap" onclick="event.stopPropagation()">
-        <button class="btn btn-primary btn-sm btn-split-main" id="btn-dl-unplayed-feed">
-          ${dlIcon} Download Unplayed (${feed.unplayed_available_count})
+        <button class="btn btn-primary btn-sm btn-split-main" id="btn-dl-unplayed-feed" disabled
+                title="All unplayed episodes are queued or downloaded">
+          ${dlIcon} Download Unplayed
         </button>
         <button class="btn btn-primary btn-sm btn-split-caret" onclick="${caretToggle}">${caret}</button>
         <div class="ep-more-dropdown" style="right:0;left:auto;min-width:190px">
-          <button id="btn-dl-unplayed-feed-dd">Download Unplayed (${feed.unplayed_available_count})</button>
+          <button id="btn-dl-unplayed-feed-dd" disabled>Download Unplayed</button>
           <button id="btn-dl-all-feed">Download All (${feed.available_count})</button>
         </div>
       </div>`;
     } else {
+      // No unplayed pending, no active downloads — just "Download All"
       btnHtml = `<button class="btn btn-primary btn-sm" id="btn-dl-all-feed">
         ${dlIcon} Download All (${feed.available_count})
       </button>`;
     }
+  } else if (activeDownloads) {
+    // Everything queued or downloading — show disabled buttons
+    btnHtml = `<div class="ep-more-wrap" onclick="event.stopPropagation()">
+      <button class="btn btn-primary btn-sm btn-split-main" id="btn-dl-unplayed-feed" disabled
+              title="All unplayed episodes are queued or downloaded">
+        ${dlIcon} Download Unplayed
+      </button>
+      <button class="btn btn-primary btn-sm btn-split-caret" disabled>${caret}</button>
+      <div class="ep-more-dropdown" style="right:0;left:auto;min-width:190px">
+        <button id="btn-dl-unplayed-feed-dd" disabled>Download Unplayed</button>
+        <button id="btn-dl-all-feed" disabled>Download All</button>
+      </div>
+    </div>`;
   }
 
   // When downloads are in progress, append a compact indicator + cancel — but keep
@@ -328,7 +361,7 @@ async function viewFeedDetail(feedId) {
           <div class="feed-header-author">${feed.author || ""}</div>
           <div class="feed-last-checked">
             ${feed.last_checked
-              ? `Last checked ${new Date(feed.last_checked + "Z").toLocaleString(undefined, {year:"numeric",month:"short",day:"numeric",hour:"2-digit",minute:"2-digit",second:"2-digit"})}`
+              ? `Last checked ${fmtDateTime(feed.last_checked)}`
               : "Never checked"}
           </div>
           <div class="feed-header-stats">
@@ -604,7 +637,7 @@ async function viewFeedDetail(feedId) {
             ${feed.hidden_count > 0 ? `<button class="btn btn-ghost btn-sm" id="btn-show-hidden">
               Show Hidden
             </button>` : ""}
-            ${feed.downloaded_count > 0 ? `<button class="btn btn-ghost btn-sm" id="btn-mark-all-played">Mark all played</button>` : ""}
+            ${feed.episode_count > 0 ? `<button class="btn btn-ghost btn-sm" id="btn-mark-all-played">Mark all played</button>` : ""}
             <span id="dl-btn-area">${_buildDlBtnHtml(feed, initialQueueCount)}</span>
             <svg class="panel-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="6 9 12 15 18 9"/>
@@ -772,20 +805,9 @@ async function viewFeedDetail(feedId) {
       const r = await API.markAllPlayed(id);
       Toast.success(`${r.updated} episode${r.updated !== 1 ? "s" : ""} marked as played`);
       updateStatus();
-      document.querySelectorAll("#episode-list .episode-item").forEach((row) => {
-        if (row.dataset.played === "1") return;
-        row.dataset.played = "1";
-        const titleEl = row.querySelector(".episode-title");
-        if (titleEl && !titleEl.querySelector(".ep-played-dot")) {
-          titleEl.insertAdjacentHTML("afterbegin", '<span class="ep-played-dot" title="Played"></span>');
-        }
-        const markBtn = [...row.querySelectorAll(".btn-icon")].find((b) => b.title === "Mark as played");
-        if (markBtn) {
-          markBtn.title = "Mark as unplayed";
-          markBtn.innerHTML = svg('<polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.5"/>');
-        }
-      });
-      await _refreshFeedStats();
+      await Promise.all([_refreshEpisodeList(), _refreshFeedStats()]);
+      // _refreshFeedStats updates window._epState.feed with fresh counts; rebuild buttons now
+      _rebuildDlArea(0);
       btn.disabled = false;
       btn.textContent = "Mark all played";
     } catch (e) {
@@ -1000,14 +1022,29 @@ async function viewFeedDetail(feedId) {
     _feedDLPollTick(); // immediate first tick
   }
 
+  function _disableDlBtns() {
+    ["btn-dl-unplayed-feed", "btn-dl-unplayed-feed-dd", "btn-dl-all-feed",
+     "btn-split-caret"].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = true;
+    });
+    // Also disable any caret button adjacent to the split main
+    document.querySelectorAll("#dl-btn-area .btn-split-caret").forEach(el => { el.disabled = true; });
+  }
+
   function _wireDlBtns() {
-    document.getElementById("btn-dl-unplayed-feed")?.addEventListener("click", _doDownloadUnplayed);
+    document.getElementById("btn-dl-unplayed-feed")?.addEventListener("click", () => {
+      _disableDlBtns();
+      _doDownloadUnplayed();
+    });
     document.getElementById("btn-dl-unplayed-feed-dd")?.addEventListener("click", (e) => {
       e.currentTarget.closest(".ep-more-wrap")?.removeAttribute("data-open");
+      _disableDlBtns();
       _doDownloadUnplayed();
     });
     document.getElementById("btn-dl-all-feed")?.addEventListener("click", (e) => {
       e.currentTarget.closest(".ep-more-wrap")?.removeAttribute("data-open");
+      _disableDlBtns();
       _doDownloadAll();
     });
     document.getElementById("btn-dl-cancel-feed")?.addEventListener("click", async () => {
@@ -1028,6 +1065,9 @@ async function viewFeedDetail(feedId) {
       updateStatus();
       if (r.queued > 0) {
         Toast.info(`Queued ${r.queued} unplayed episode${r.queued !== 1 ? "s" : ""} for download`);
+        // Zero out unplayed count so the rebuilt button renders disabled
+        const feed = window._epState?.feed;
+        if (feed) feed.unplayed_available_count = 0;
         _rebuildDlArea(r.queued);
         _startFeedDLPoll();
       } else {
@@ -1042,6 +1082,9 @@ async function viewFeedDetail(feedId) {
       updateStatus();
       if (r.queued > 0) {
         Toast.info(`Queued ${r.queued} episode${r.queued !== 1 ? "s" : ""} for download`);
+        // Zero out both counts so the rebuilt buttons render disabled
+        const feed = window._epState?.feed;
+        if (feed) { feed.available_count = 0; feed.unplayed_available_count = 0; }
         _rebuildDlArea(r.queued);
         _startFeedDLPoll();
       } else {
@@ -1820,6 +1863,7 @@ function showRenumberModal(feedId) {
 }
 
 function showUploadFeedXmlModal(feedId, feed) {
+  // ── Phase 1: file picker ──────────────────────────────────────────────────
   Modal.open(
     "Upload Feed XML",
     `<div class="form-hint" style="margin-bottom:16px">
@@ -1837,53 +1881,24 @@ function showUploadFeedXmlModal(feedId, feed) {
       <button class="btn btn-primary" id="btn-start-xml-upload">Upload</button>
     </div>`,
     (body) => {
-      const btn     = body.querySelector("#btn-start-xml-upload");
-      const fileIn  = body.querySelector("#xml-file-input");
-      const result  = body.querySelector("#xml-upload-result");
+      const btn    = body.querySelector("#btn-start-xml-upload");
+      const fileIn = body.querySelector("#xml-file-input");
+      const result = body.querySelector("#xml-upload-result");
 
       btn.addEventListener("click", async () => {
         const file = fileIn.files[0];
         if (!file) { fileIn.focus(); return; }
         btn.disabled = true;
-        btn.textContent = "Uploading…";
+        btn.textContent = "Scanning…";
         result.style.display = "none";
         try {
-          const r = await API.uploadFeedXml(feedId, file);
-          btn.textContent = "Done";
-          const skippedNote = r.skipped > 0 ? ` · ${r.skipped} duplicate${r.skipped !== 1 ? "s" : ""} excluded` : "";
-          Toast.show(`${r.added} episode${r.added !== 1 ? "s" : ""} added${skippedNote}`, "success", 6000);
-
-          if (r.files_to_rename > 0) {
-            // Show inline rename prompt instead of auto-closing
-            result.style.display = "block";
-            result.style.color = "var(--text-2)";
-            result.innerHTML = `
-              <div style="margin-bottom:10px;color:var(--text-1);font-weight:500">
-                ${r.files_to_rename} downloaded file${r.files_to_rename !== 1 ? "s have" : " has"} updated episode ordering.
-              </div>
-              <div style="display:flex;gap:8px">
-                <button class="btn btn-primary btn-sm" id="btn-xml-rename">Rename Files</button>
-                <button class="btn btn-ghost btn-sm" id="btn-xml-keep">Keep as is</button>
-              </div>`;
-            result.querySelector("#btn-xml-rename").addEventListener("click", async () => {
-              try {
-                await API.applyFileUpdates(feedId);
-                Toast.success("Files renamed successfully");
-              } catch (e) {
-                Toast.error(e.message);
-              }
-              Modal.close();
-              await Promise.all([_refreshEpisodeList(), _refreshFeedStats()]);
-            });
-            result.querySelector("#btn-xml-keep").addEventListener("click", async () => {
-              Modal.close();
-              await Promise.all([_refreshEpisodeList(), _refreshFeedStats()]);
-            });
+          const preview = await API.previewFeedXml(feedId, file);
+          if (preview.collisions.length === 0) {
+            // No conflicts — commit immediately
+            _xmlDoCommit(feedId, preview.temp_id, {}, result, btn);
           } else {
-            result.style.display = "block";
-            result.style.color = "var(--success)";
-            result.textContent = `Done — ${r.added} episode${r.added !== 1 ? "s" : ""} added.`;
-            setTimeout(async () => { Modal.close(); await Promise.all([_refreshEpisodeList(), _refreshFeedStats()]); }, 1500);
+            // Walk the user through each collision
+            _xmlShowCollisionModal(feedId, preview, result, btn);
           }
         } catch (e) {
           result.style.display = "block";
@@ -1897,101 +1912,540 @@ function showUploadFeedXmlModal(feedId, feed) {
   );
 }
 
+// ── Collision walkthrough ─────────────────────────────────────────────────────
+
+function _xmlShowCollisionModal(feedId, preview, _resultEl, _uploadBtn) {
+  const { temp_id, collisions } = preview;
+  const resolutions = {};
+  let idx = 0;
+
+  function pick(key, resolution) {
+    resolutions[key] = resolution;
+    idx++;
+    if (idx >= collisions.length) {
+      _xmlDoCommitInModal(feedId, temp_id, resolutions);
+    } else {
+      render();
+    }
+  }
+
+  function pickWithFlash(cardEl, key, resolution) {
+    cardEl.classList.add("xml-rev-card--chosen");
+    setTimeout(() => pick(key, resolution), 180);
+  }
+
+  function render() {
+    const c       = collisions[idx];
+    const total   = collisions.length;
+    const ex      = c.existing;
+    const inc     = c.incoming;
+
+    const exDT  = ex.published_at  ? fmtDateTime(ex.published_at)  : null;
+    const incDT = inc.published_at ? fmtDateTime(inc.published_at) : null;
+    const dateDiffers = exDT !== incDT;
+    const urlDiffers  = (ex.enclosure_url  || "") !== (inc.enclosure_url  || "");
+    const durDiffers  = (ex.duration       || "") !== (inc.duration       || "");
+
+    const exDescRaw  = _xmlStripHtml(ex.description  || "");
+    const incDescRaw = _xmlStripHtml(inc.description || "");
+    const descDiffers = (exDescRaw || incDescRaw) && exDescRaw !== incDescRaw;
+
+    // Build field rows for one card side.  Only shows fields that differ
+    // (plus status, which is relevant regardless).
+    function cardFields(ep, isExisting) {
+      const dateVal = isExisting ? exDT : incDT;
+      let html = "";
+
+      if (isExisting && ep.status) {
+        html += `<div class="xml-rev-field">
+          <span class="xml-rev-label">Status</span>
+          <span>${statusBadge(ep.status)}</span>
+        </div>`;
+      }
+
+      html += `<div class="xml-rev-field${dateDiffers ? " xml-rev-differs" : ""}">
+        <span class="xml-rev-label">Date</span>
+        <span class="xml-rev-value">${escHTML(dateVal || "—")}</span>
+      </div>`;
+
+      if (urlDiffers) {
+        html += `<div class="xml-rev-field xml-rev-differs">
+          <span class="xml-rev-label">Audio URL</span>
+          <span class="xml-rev-value xml-rev-mono">${escHTML(_xmlShortUrl(ep.enclosure_url || "—"))}</span>
+        </div>`;
+      }
+
+      if (durDiffers && (ep.duration || (isExisting ? inc.duration : ex.duration))) {
+        html += `<div class="xml-rev-field xml-rev-differs">
+          <span class="xml-rev-label">Duration</span>
+          <span class="xml-rev-value">${escHTML(ep.duration || "—")}</span>
+        </div>`;
+      }
+
+      return html;
+    }
+
+    // Description diff section
+    let descSection = "";
+    if (descDiffers) {
+      const diff    = _xmlWordDiff(_xmlLimitWords(exDescRaw, 120), _xmlLimitWords(incDescRaw, 120));
+      const exRend  = _xmlRenderDiff(diff, "a");
+      const incRend = _xmlRenderDiff(diff, "b");
+      descSection = `
+        <div class="xml-rev-desc-section">
+          <div class="xml-rev-desc-hdr">Description differences</div>
+          <div class="xml-rev-desc-cols">
+            <div class="xml-rev-desc-panel">
+              <div class="xml-rev-desc-side-hdr">In app</div>
+              <div class="xml-rev-desc-text">${exRend}</div>
+            </div>
+            <div class="xml-rev-desc-panel">
+              <div class="xml-rev-desc-side-hdr">In file</div>
+              <div class="xml-rev-desc-text">${incRend}</div>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    // Progress pips
+    const pips = collisions.map((_, i) => {
+      const cls = i < idx ? "xml-rev-pip xml-rev-pip--done"
+                : i === idx ? "xml-rev-pip xml-rev-pip--active"
+                : "xml-rev-pip";
+      return `<span class="${cls}"></span>`;
+    }).join("");
+
+    document.getElementById("modal-title").textContent = `Review Import Conflict`;
+    document.getElementById("modal-body").innerHTML = `
+      <div class="xml-rev-progress">
+        <span class="xml-rev-progress-text">${idx + 1} of ${total}</span>
+        <div class="xml-rev-pips">${pips}</div>
+      </div>
+      <p class="xml-rev-ep-title">${escHTML(inc.title || ex.title || "Untitled Episode")}</p>
+      <p class="xml-rev-subhead">Click the version you want to keep.</p>
+      <div class="xml-rev-cards">
+        <div class="xml-rev-card" id="xml-card-ex" tabindex="0" role="button">
+          <div class="xml-rev-card-hdr">Already in app</div>
+          <div class="xml-rev-fields">${cardFields(ex, true)}</div>
+          <div class="xml-rev-card-footer">Keep this version</div>
+        </div>
+        <div class="xml-rev-card" id="xml-card-inc" tabindex="0" role="button">
+          <div class="xml-rev-card-hdr">In imported file</div>
+          <div class="xml-rev-fields">${cardFields(inc, false)}</div>
+          <div class="xml-rev-card-footer">Keep this version</div>
+        </div>
+      </div>
+      ${descSection}
+      <div class="xml-rev-both-row">
+        <button class="btn btn-ghost btn-sm" id="xml-keep-both-btn">Keep Both — imported copy tagged [import-dupe]</button>
+      </div>
+      <div class="xml-rev-bulk-row">
+        <button class="btn btn-ghost btn-sm" id="xml-omit-all-btn">Omit All Remaining</button>
+        <button class="btn btn-ghost btn-sm" id="xml-keep-all-btn">Keep All Remaining</button>
+      </div>`;
+
+    const exCard  = document.getElementById("xml-card-ex");
+    const incCard = document.getElementById("xml-card-inc");
+    exCard.addEventListener("click",   () => pickWithFlash(exCard,  c.key, "keep_existing"));
+    incCard.addEventListener("click",  () => pickWithFlash(incCard, c.key, "use_imported"));
+    exCard.addEventListener("keydown",  (e) => { if (e.key === "Enter" || e.key === " ") exCard.click(); });
+    incCard.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") incCard.click(); });
+
+    document.getElementById("xml-keep-both-btn").onclick = () => pick(c.key, "keep_both");
+    document.getElementById("xml-omit-all-btn").onclick  = () => {
+      for (let i = idx; i < collisions.length; i++) resolutions[collisions[i].key] = "keep_existing";
+      _xmlDoCommitInModal(feedId, temp_id, resolutions);
+    };
+    document.getElementById("xml-keep-all-btn").onclick  = () => {
+      for (let i = idx; i < collisions.length; i++) resolutions[collisions[i].key] = "keep_both";
+      _xmlDoCommitInModal(feedId, temp_id, resolutions);
+    };
+  }
+
+  document.getElementById("modal").classList.add("modal-wide");
+  render();
+}
+
+// ── XML diff helpers ──────────────────────────────────────────────────────────
+
+function _xmlStripHtml(html) {
+  const tmp = document.createElement("div");
+  tmp.innerHTML = html;
+  return (tmp.textContent || tmp.innerText || "").replace(/\s+/g, " ").trim();
+}
+
+function _xmlLimitWords(text, max) {
+  const words = text.split(/\s+/).filter(Boolean);
+  return words.length <= max ? text : words.slice(0, max).join(" ") + "…";
+}
+
+function _xmlShortUrl(url) {
+  if (!url) return "";
+  try {
+    const u = new URL(url);
+    const path = u.pathname.length > 40 ? "…" + u.pathname.slice(-32) : u.pathname;
+    return u.hostname + path;
+  } catch {
+    return url.length > 55 ? url.slice(0, 32) + "…" + url.slice(-15) : url;
+  }
+}
+
+function _xmlWordDiff(textA, textB) {
+  const wa = textA.split(/\s+/).filter(Boolean);
+  const wb = textB.split(/\s+/).filter(Boolean);
+  const m = wa.length, n = wb.length;
+  // Full DP table for traceback; cap at 200 words each for performance
+  const MA = Math.min(m, 200), NA = Math.min(n, 200);
+  const dp = Array.from({length: MA + 1}, () => new Uint16Array(NA + 1));
+  for (let i = MA - 1; i >= 0; i--) {
+    for (let j = NA - 1; j >= 0; j--) {
+      dp[i][j] = wa[i] === wb[j] ? dp[i+1][j+1] + 1 : Math.max(dp[i+1][j], dp[i][j+1]);
+    }
+  }
+  const ra = [], rb = [];
+  let i = 0, j = 0;
+  while (i < MA || j < NA) {
+    if (i < MA && j < NA && wa[i] === wb[j]) {
+      ra.push({t: wa[i], s: "="}); rb.push({t: wb[j], s: "="}); i++; j++;
+    } else if (j < NA && (i >= MA || dp[i][j+1] >= dp[i+1][j])) {
+      rb.push({t: wb[j], s: "+"}); j++;
+    } else {
+      ra.push({t: wa[i], s: "-"}); i++;
+    }
+  }
+  return {a: ra, b: rb};
+}
+
+function _xmlRenderDiff(diff, side) {
+  return diff[side].map(tok => {
+    if (tok.s === "=") return escHTML(tok.t);
+    const cls = tok.s === "-" ? "xml-diff-del" : "xml-diff-add";
+    return `<mark class="${cls}">${escHTML(tok.t)}</mark>`;
+  }).join(" ");
+}
+
+async function _xmlDoCommitInModal(feedId, tempId, resolutions) {
+  document.getElementById("modal-title").textContent = "Importing…";
+  document.getElementById("modal-body").innerHTML = `<p style="color:var(--text-2);font-size:13px">Applying your choices…</p>`;
+  try {
+    const r = await API.commitFeedXml(feedId, tempId, resolutions);
+    _xmlHandleResult(feedId, r);
+  } catch (e) {
+    document.getElementById("modal-body").innerHTML = `<p style="color:var(--error);font-size:13px">${escHTML(e.message)}</p>`;
+  }
+}
+
+async function _xmlDoCommit(feedId, tempId, resolutions, resultEl, uploadBtn) {
+  try {
+    const r = await API.commitFeedXml(feedId, tempId, resolutions);
+    _xmlHandleResult(feedId, r);
+  } catch (e) {
+    resultEl.style.display = "block";
+    resultEl.style.color = "var(--error)";
+    resultEl.textContent = e.message;
+    uploadBtn.disabled = false;
+    uploadBtn.textContent = "Upload";
+  }
+}
+
+async function _xmlHandleResult(feedId, r) {
+  const skippedNote = r.skipped > 0 ? ` · ${r.skipped} duplicate${r.skipped !== 1 ? "s" : ""} excluded` : "";
+  Toast.show(`${r.added} episode${r.added !== 1 ? "s" : ""} added${skippedNote}`, "success", 6000);
+
+  if (r.files_to_rename > 0) {
+    document.getElementById("modal-title").textContent = "Files Need Renaming";
+    document.getElementById("modal-body").innerHTML = `
+      <p style="margin-bottom:12px;color:var(--text-1);font-weight:500">
+        ${r.files_to_rename} downloaded file${r.files_to_rename !== 1 ? "s have" : " has"} updated episode ordering.
+      </p>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-primary btn-sm" id="btn-xml-rename2">Rename Files</button>
+        <button class="btn btn-ghost btn-sm" id="btn-xml-keep2">Keep as is</button>
+      </div>`;
+    document.getElementById("btn-xml-rename2").addEventListener("click", async () => {
+      try { await API.applyFileUpdates(feedId); Toast.success("Files renamed successfully"); } catch (e) { Toast.error(e.message); }
+      Modal.close(); await Promise.all([_refreshEpisodeList(), _refreshFeedStats()]);
+    });
+    document.getElementById("btn-xml-keep2").addEventListener("click", async () => {
+      Modal.close(); await Promise.all([_refreshEpisodeList(), _refreshFeedStats()]);
+    });
+  } else {
+    Modal.close();
+    await Promise.all([_refreshEpisodeList(), _refreshFeedStats()]);
+  }
+}
+
 function showImportFilesModal(feedId, feed) {
   const defaultDir = feed?.podcast_folder || "";
 
-  // ── Step 1: directory input ───────────────────────────────────
+  function _srcTag(source) {
+    if (!source) return "";
+    const labels = { sidecar: "XML", id3: "ID3", filename: "file", folder: "folder" };
+    return `<span class="import-source-tag src-${source}">${labels[source] || source}</span>`;
+  }
+
+  function _confBadge(confidence) {
+    if (confidence == null) return "";
+    const pct = Math.round(confidence * 100);
+    const cls = pct >= 70 ? "badge-success" : pct >= 40 ? "badge-warning" : "badge-error";
+    return `<span class="badge ${cls}" title="Match confidence">${pct}%</span>`;
+  }
+
+  // ── Step 1: folder picker ──────────────────────────────────────
   function showStep1(errorMsg) {
     Modal.open(
-      "Import from Path",
-      `<div class="form-group">
-        <label class="form-label">Directory path</label>
-        <input class="form-control" id="import-dir-input" type="text"
-               value="${defaultDir}" placeholder="/path/to/audio/files" autofocus />
-        <div class="form-hint">Enter the folder containing your audio files. Subdirectories will be scanned recursively.</div>
+      "Import Files",
+      `<p style="font-size:13px;color:var(--text-2);margin:0 0 12px;line-height:1.5">
+        Select the folder containing your audio files. All subfolders will be scanned.
+      </p>
+      <div class="form-group">
+        <div style="display:flex;gap:8px">
+          <input class="form-control" id="import-dir-input" type="text"
+                 value="${defaultDir}" placeholder="/path/to/audio/files"
+                 style="font-family:monospace;flex:1" autofocus />
+          <button class="btn btn-ghost" type="button" id="btn-dir-go">Go \u2192</button>
+        </div>
+        <div class="form-hint">Type a path and press <strong>Go \u2192</strong>, or click folders below to navigate.</div>
       </div>
-      <div id="import-step1-error" style="color:var(--error);font-size:13px;${errorMsg ? "" : "display:none"}margin-bottom:8px">${errorMsg || ""}</div>
-      <div class="modal-actions">
+      <div id="import-dir-browser" class="import-dir-browser"></div>
+      <div id="import-step1-error" style="color:var(--error);font-size:13px;margin-top:8px;${errorMsg ? "" : "display:none"}">${errorMsg || ""}</div>
+      <div class="modal-actions" style="margin-top:12px">
         <button class="btn btn-ghost" onclick="Modal.close()">Cancel</button>
-        <button class="btn btn-primary" id="btn-scan-dir">Scan Files</button>
+        <button class="btn btn-primary" id="btn-scan-dir">Scan This Folder</button>
       </div>`,
       (body) => {
         const dirInput = body.querySelector("#import-dir-input");
         const errEl    = body.querySelector("#import-step1-error");
         const scanBtn  = body.querySelector("#btn-scan-dir");
+        const goBtn    = body.querySelector("#btn-dir-go");
+
+        // Load the directory browser
+        if (defaultDir) {
+          DirBrowser.load("import-dir-browser", "import-dir-input", defaultDir);
+        } else {
+          DirBrowser.load("import-dir-browser", "import-dir-input", "/");
+        }
+
+        goBtn.addEventListener("click", () => {
+          DirBrowser.load("import-dir-browser", "import-dir-input", dirInput.value.trim() || "/");
+        });
+        dirInput.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            DirBrowser.load("import-dir-browser", "import-dir-input", dirInput.value.trim() || "/");
+          }
+        });
 
         async function doScan() {
           const dir = dirInput.value.trim();
           if (!dir) { dirInput.focus(); return; }
           scanBtn.disabled = true;
-          scanBtn.textContent = "Scanning…";
+          scanBtn.textContent = "Scanning\u2026";
           errEl.style.display = "none";
           try {
             const preview = await API.previewImport(feedId, dir);
-            showStep2(dir, preview);
+            showStep2Summary(dir, preview);
           } catch (e) {
             errEl.textContent = e.message;
             errEl.style.display = "block";
             scanBtn.disabled = false;
-            scanBtn.textContent = "Scan Files";
+            scanBtn.textContent = "Scan This Folder";
           }
         }
-
         scanBtn.addEventListener("click", doScan);
-        dirInput.addEventListener("keydown", (e) => { if (e.key === "Enter") doScan(); });
       }
     );
   }
 
-  // ── Step 2: staging table ─────────────────────────────────────
-  async function showStep2(dir, preview) {
-    // Load all feed episodes for the match dropdowns
+  // ── Step 2: analysis summary ───────────────────────────────────
+  function showStep2Summary(dir, preview) {
+    const files       = preview.files || [];
+    const analysis    = preview.folder_analysis || {};
+    const actionFiles = files.filter(f => !f.already_registered);
+    const nMatched    = actionFiles.filter(f => f.match).length;
+    const nNew        = actionFiles.filter(f => !f.match).length;
+    const nRegistered = files.filter(f => f.already_registered).length;
+
+    // Confidence analysis
+    const matchConfs = actionFiles.filter(f => f.match).map(f => f.match.confidence);
+    const minConf = matchConfs.length ? Math.min(...matchConfs) : 0;
+    const allHighConf = matchConfs.length > 0 && minConf >= 0.70 && nNew === 0;
+    const hasLowConf = matchConfs.some(c => c < 0.40);
+
+    // Folder type banner
+    let bannerHtml = "";
+    const ft = analysis.type;
+    if (ft === "castcharm") {
+      bannerHtml = `<div class="import-analysis-banner banner-castcharm">
+        CastCharm folder detected \u2014 XML sidecars found, matching will be very accurate.</div>`;
+    } else if (ft === "year_organized") {
+      bannerHtml = `<div class="import-analysis-banner banner-year">
+        Year-organized folder detected \u2014 dates extracted from folder names.</div>`;
+    } else if (ft === "season_organized") {
+      bannerHtml = `<div class="import-analysis-banner banner-season">
+        Season-organized folder detected \u2014 season numbers extracted from folder names.</div>`;
+    }
+
+    // Confidence text
+    let confText = "";
+    if (allHighConf) {
+      confText = `<p style="font-size:13px;color:var(--success);margin:0 0 4px;line-height:1.5">All matches are high confidence. You can import directly or review details first.</p>`;
+    } else if (hasLowConf) {
+      confText = `<p style="font-size:13px;color:var(--warning);margin:0 0 4px;line-height:1.5">Some matches have low confidence \u2014 review recommended before importing.</p>`;
+    } else if (nMatched > 0) {
+      confText = `<p style="font-size:13px;color:var(--text-2);margin:0 0 4px;line-height:1.5">Review the matched files to confirm they look correct.</p>`;
+    }
+
+    // If everything is new or nothing to do, skip summary and go straight to review
+    if (nMatched === 0 && nNew > 0) {
+      showStep3Review(dir, preview);
+      return;
+    }
+
+    const subfolderNote = analysis.subfolder_count > 0
+      ? ` across ${analysis.subfolder_count} subfolder${analysis.subfolder_count !== 1 ? "s" : ""}`
+      : "";
+
+    // Nothing to import?
+    if (actionFiles.length === 0 && nRegistered > 0) {
+      Modal.open(
+        "Import Files \u2014 Nothing to Do",
+        `<p style="font-size:13px;color:var(--text-2);line-height:1.5;margin-bottom:16px">
+          All ${nRegistered} file${nRegistered !== 1 ? "s" : ""} in this folder are already imported.
+        </p>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" id="btn-import-back">\u2190 Back</button>
+          <button class="btn btn-primary" onclick="Modal.close()">Done</button>
+        </div>`,
+        (body) => {
+          body.querySelector("#btn-import-back").addEventListener("click", () => showStep1());
+        }
+      );
+      return;
+    }
+
+    if (files.length === 0) {
+      Modal.open(
+        "Import Files \u2014 No Files Found",
+        `<p style="text-align:center;color:var(--text-2);padding:24px 0">No audio files found in that directory.</p>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" id="btn-import-back">\u2190 Back</button>
+        </div>`,
+        (body) => {
+          body.querySelector("#btn-import-back").addEventListener("click", () => showStep1());
+        }
+      );
+      return;
+    }
+
+    Modal.open(
+      "Import Files \u2014 Analysis",
+      `<div style="font-size:13px;color:var(--text-3);margin-bottom:10px;font-family:monospace;word-break:break-all">${escHTML(dir)}</div>
+      <p style="font-size:13px;color:var(--text-2);margin:0 0 12px;line-height:1.5">
+        Found <strong>${preview.total_files}</strong> audio file${preview.total_files !== 1 ? "s" : ""}${subfolderNote}.
+      </p>
+      ${bannerHtml}
+      <div class="import-stat-cards">
+        ${nMatched > 0 ? `<div class="import-stat-card">
+          <div class="stat-num" style="color:var(--warning)">${nMatched}</div>
+          <div class="stat-label">matched</div>
+        </div>` : ""}
+        ${nNew > 0 ? `<div class="import-stat-card">
+          <div class="stat-num" style="color:var(--primary)">${nNew}</div>
+          <div class="stat-label">new</div>
+        </div>` : ""}
+        ${nRegistered > 0 ? `<div class="import-stat-card">
+          <div class="stat-num" style="color:var(--success)">${nRegistered}</div>
+          <div class="stat-label">already imported</div>
+        </div>` : ""}
+      </div>
+      ${confText}
+      <div class="modal-actions" style="margin-top:16px">
+        <button class="btn btn-ghost" id="btn-import-back">\u2190 Back</button>
+        <button class="btn btn-ghost" id="btn-review-details">Review Details</button>
+        ${allHighConf ? `<button class="btn btn-primary" id="btn-import-all">Import All \u2192</button>` : `<button class="btn btn-primary" id="btn-review-details-primary">Review & Import</button>`}
+      </div>`,
+      (body) => {
+        body.querySelector("#btn-import-back").addEventListener("click", () => showStep1());
+        body.querySelector("#btn-review-details")?.addEventListener("click", () => showStep3Review(dir, preview));
+
+        const primaryReview = body.querySelector("#btn-review-details-primary");
+        if (primaryReview) primaryReview.addEventListener("click", () => showStep3Review(dir, preview));
+
+        const importAllBtn = body.querySelector("#btn-import-all");
+        if (importAllBtn) {
+          importAllBtn.addEventListener("click", async () => {
+            importAllBtn.disabled = true;
+            importAllBtn.textContent = "Importing\u2026";
+            try {
+              const items = actionFiles.map(f => ({
+                path: f.path,
+                skip: false,
+                episode_id: f.match?.episode_id || null,
+              }));
+              await API.commitImport(feedId, items);
+              Modal.close();
+              Toast.success("Import started \u2014 check the banner above the episode list for progress.");
+              _pollImportBanner(feedId);
+            } catch (e) {
+              Toast.error(e.message);
+              importAllBtn.disabled = false;
+              importAllBtn.textContent = "Import All \u2192";
+            }
+          });
+        }
+      }
+    );
+  }
+
+  // ── Step 3: review table ───────────────────────────────────────
+  async function showStep3Review(dir, preview) {
     let allEpisodes = [];
     try {
       const eps = await API.getFeedEpisodes(feedId, 5000, 0, "asc");
       allEpisodes = eps.items || eps || [];
     } catch (_) {}
 
-    const files        = preview.files || [];
-    const actionFiles  = files.filter(f => !f.already_registered);  // need attention
-    const regFiles     = files.filter(f => f.already_registered);   // already done
-    const nMatched     = actionFiles.filter(f => f.match).length;
-    const nNew         = actionFiles.filter(f => !f.match).length;
-    const nRegistered  = regFiles.length;
+    const files       = preview.files || [];
+    const actionFiles = files.filter(f => !f.already_registered);
+    const regFiles    = files.filter(f => f.already_registered);
+    const nRegistered = regFiles.length;
 
-    // Build episode options HTML once, reused per row
-    const epOptionsHtml = allEpisodes.map(ep => {
-      const label = ep.title ? `#${ep.seq_number || "?"} — ${ep.title.substring(0, 60)}` : `Episode ${ep.id}`;
-      return `<option value="${ep.id}">${label}</option>`;
-    }).join("");
+    // Categorize for filter tabs
+    const needsReview = actionFiles.filter(f => f.match && f.match.confidence < 0.70);
+    const highConf    = actionFiles.filter(f => f.match && f.match.confidence >= 0.70);
+    const newEps      = actionFiles.filter(f => !f.match);
 
-    // Per-row confidence badge
-    function confBadge(confidence) {
-      if (confidence == null) return "";
-      const pct = Math.round(confidence * 100);
-      const cls = pct >= 70 ? "badge-success" : pct >= 40 ? "badge-warning" : "badge-error";
-      return `<span class="badge ${cls}" title="Match confidence">${pct}%</span>`;
-    }
+    // Sort: low confidence first, then new, then high confidence
+    const sortedFiles = [...needsReview, ...newEps, ...highConf];
 
-    // Build rows only for files that need action
     const thTd = "position:sticky;top:0;padding:7px 10px;font-weight:600;background:var(--bg-3);box-shadow:0 1px 0 var(--border);z-index:1";
-    const rowsHtml = actionFiles.map((f, i) => {
+
+    function buildRow(f, i) {
       const matchId   = f.match?.episode_id ?? "";
       const conf      = f.match?.confidence ?? null;
       const isMatched = !!f.match;
+      const src       = f.metadata_sources || {};
       const statusDot = isMatched
-        ? `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--warning);flex-shrink:0" title="Matched to an existing episode"></span>`
-        : `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--primary);flex-shrink:0" title="No match found — will create a new episode"></span>`;
-      const infoLine = [f.date, f.episode_number ? `ep. ${f.episode_number}` : null, f.duration]
-        .filter(Boolean).join(" · ");
-      return `<tr id="import-row-${i}" data-path="${f.path.replace(/"/g, "&quot;")}">
+        ? `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--warning);flex-shrink:0" title="Matched to existing episode"></span>`
+        : `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--primary);flex-shrink:0" title="New episode"></span>`;
+      const infoParts = [];
+      if (f.date) infoParts.push(f.date + (f.date_is_approximate ? " ~" : "") + _srcTag(src.date));
+      if (f.episode_number != null) infoParts.push(`ep. ${f.episode_number}` + _srcTag(src.episode_number));
+      if (f.season_number != null) infoParts.push(`S${f.season_number}` + _srcTag(src.season_number));
+      if (f.duration) infoParts.push(f.duration);
+      const infoLine = infoParts.join(" \u00B7 ");
+      const titleSrc = _srcTag(src.title);
+
+      return `<tr id="import-row-${i}" data-path="${f.path.replace(/"/g, "&quot;")}"
+        data-conf="${conf ?? -1}" data-has-match="${isMatched ? 1 : 0}">
         <td style="padding:7px 10px;font-size:12px;max-width:220px">
           <div style="display:flex;align-items:flex-start;gap:7px">
             ${statusDot}
             <div style="min-width:0">
               <div style="word-break:break-all;line-height:1.3">${f.filename}</div>
               ${f.title && f.title !== f.filename.replace(/\.[^.]+$/, "")
-                ? `<div style="color:var(--text-3);font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${f.title.replace(/"/g, "&quot;")}">${f.title}</div>`
+                ? `<div style="color:var(--text-3);font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${f.title.replace(/"/g, "&quot;")}">${f.title}${titleSrc}</div>`
                 : ""}
               ${infoLine ? `<div style="color:var(--text-3);font-size:11px;margin-top:1px">${infoLine}</div>` : ""}
             </div>
@@ -1999,13 +2453,13 @@ function showImportFilesModal(feedId, feed) {
         </td>
         <td style="padding:7px 10px">
           <select class="form-control import-ep-select" style="font-size:12px;padding:3px 6px;width:100%" data-row="${i}">
-            <option value="">— Create new episode —</option>
+            <option value="">\u2014 Create new episode \u2014</option>
             ${allEpisodes.map(ep => {
-              const label = ep.title ? `#${ep.seq_number || "?"} — ${ep.title.substring(0, 55)}` : `Episode ${ep.id}`;
+              const label = ep.title ? `#${ep.seq_number || "?"} \u2014 ${ep.title.substring(0, 55)}` : `Episode ${ep.id}`;
               return `<option value="${ep.id}" ${ep.id == matchId ? "selected" : ""}>${label}</option>`;
             }).join("")}
           </select>
-          ${isMatched ? `<div class="import-conf-cell" style="margin-top:4px">${confBadge(conf)}</div>` : ""}
+          ${isMatched ? `<div class="import-conf-cell" style="margin-top:4px">${_confBadge(conf)}</div>` : ""}
         </td>
         <td style="padding:7px 10px;text-align:center;white-space:nowrap">
           <label style="cursor:pointer;display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--text-2)">
@@ -2014,26 +2468,9 @@ function showImportFilesModal(feedId, feed) {
           </label>
         </td>
       </tr>`;
-    }).join("");
-
-    // Summary stats row
-    const statPills = [
-      nMatched   > 0 ? `<span style="display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:20px;background:rgba(var(--warning-rgb,200,150,50),0.15);color:var(--warning);font-size:12px;font-weight:600"><span style="width:7px;height:7px;border-radius:50%;background:currentColor;display:inline-block"></span>${nMatched} matched</span>` : "",
-      nNew       > 0 ? `<span style="display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:20px;background:rgba(var(--primary-rgb,80,130,220),0.15);color:var(--primary);font-size:12px;font-weight:600"><span style="width:7px;height:7px;border-radius:50%;background:currentColor;display:inline-block"></span>${nNew} new</span>` : "",
-      nRegistered > 0 ? `<span style="display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:20px;background:rgba(var(--success-rgb,60,180,100),0.15);color:var(--success);font-size:12px;font-weight:600"><span style="width:7px;height:7px;border-radius:50%;background:currentColor;display:inline-block"></span>${nRegistered} already imported</span>` : "",
-    ].filter(Boolean).join(" ");
-
-    // Guidance text based on state
-    let guidance = "";
-    if (actionFiles.length === 0 && nRegistered > 0) {
-      guidance = `All ${nRegistered} file${nRegistered !== 1 ? "s" : ""} in this folder are already imported. Nothing to do.`;
-    } else if (nMatched > 0 && nNew === 0) {
-      guidance = "All files were matched to existing episodes. Review the matches below — adjust any that look wrong — then click Import.";
-    } else if (nMatched === 0 && nNew > 0) {
-      guidance = "No files could be matched to existing episodes. They will each be added as a new episode. Use the dropdown to link a file to an existing episode if needed.";
-    } else if (nMatched > 0 && nNew > 0) {
-      guidance = `${nMatched} file${nMatched !== 1 ? "s" : ""} matched to existing episodes; ${nNew} could not be matched and will become new episodes. Review below and adjust as needed.`;
     }
+
+    const rowsHtml = sortedFiles.map((f, i) => buildRow(f, i)).join("");
 
     // Already-imported collapsible section
     const regSection = nRegistered > 0 ? `
@@ -2044,9 +2481,9 @@ function showImportFilesModal(feedId, feed) {
         <div style="margin-top:6px;border:1px solid var(--border);border-radius:6px;overflow:hidden">
           ${regFiles.map(f => `
             <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--border);font-size:12px;color:var(--text-3)">
-              <span style="color:var(--success)">✓</span>
+              <span style="color:var(--success)">\u2713</span>
               <span style="word-break:break-all">${f.filename}</span>
-              ${f.match?.episode_title ? `<span style="margin-left:auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px;flex-shrink:0" title="${f.match.episode_title.replace(/"/g, "&quot;")}">→ ${f.match.episode_title}</span>` : ""}
+              ${f.match?.episode_title ? `<span style="margin-left:auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px;flex-shrink:0" title="${f.match.episode_title.replace(/"/g, "&quot;")}">\u2192 ${f.match.episode_title}</span>` : ""}
             </div>`).join("")}
         </div>
       </details>` : "";
@@ -2056,8 +2493,27 @@ function showImportFilesModal(feedId, feed) {
       ? "Nothing to import"
       : `Import ${importCount} file${importCount !== 1 ? "s" : ""}`;
 
+    // Filter tabs
+    const tabDefs = [
+      { id: "all", label: `All (${actionFiles.length})`, filter: () => true },
+      needsReview.length > 0 ? { id: "review", label: `Needs Review (${needsReview.length})`, filter: (tr) => tr.dataset.hasMatch === "1" && parseFloat(tr.dataset.conf) < 0.70 } : null,
+      highConf.length > 0 ? { id: "high", label: `High Confidence (${highConf.length})`, filter: (tr) => tr.dataset.hasMatch === "1" && parseFloat(tr.dataset.conf) >= 0.70 } : null,
+      newEps.length > 0 ? { id: "new", label: `New (${newEps.length})`, filter: (tr) => tr.dataset.hasMatch === "0" } : null,
+    ].filter(Boolean);
+
+    const defaultTab = needsReview.length > 0 ? "review" : "all";
+    const tabsHtml = tabDefs.map(t =>
+      `<span class="import-filter-tab${t.id === defaultTab ? " active" : ""}" data-tab="${t.id}">${t.label}</span>`
+    ).join("");
+
+    // Bulk action buttons
+    const bulkHtml = `<div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+      ${newEps.length > 0 ? `<button class="btn btn-ghost" id="btn-skip-unmatched" style="font-size:11px;padding:4px 10px">Skip all unmatched</button>` : ""}
+      ${needsReview.length > 0 ? `<button class="btn btn-ghost" id="btn-skip-low-conf" style="font-size:11px;padding:4px 10px">Skip low confidence</button>` : ""}
+    </div>`;
+
     const tableHtml = actionFiles.length === 0 ? "" :
-      `<div style="overflow-x:auto;max-height:min(52vh,500px);overflow-y:auto;border:1px solid var(--border);border-radius:6px;margin-top:10px">
+      `<div style="overflow-x:auto;max-height:min(52vh,500px);overflow-y:auto;border:1px solid var(--border);border-radius:6px;margin-top:6px">
         <table style="width:100%;border-collapse:separate;border-spacing:0;font-size:13px">
           <thead>
             <tr>
@@ -2070,47 +2526,57 @@ function showImportFilesModal(feedId, feed) {
         </table>
       </div>`;
 
-    const noFilesMsg = files.length === 0
-      ? `<p style="text-align:center;color:var(--text-2);padding:24px 0">No audio files found in that directory.</p>`
-      : "";
-
     Modal.open(
-      `Review & Import — ${files.length} file${files.length !== 1 ? "s" : ""} found`,
-      `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">${statPills}</div>
-      ${guidance ? `<p style="font-size:13px;color:var(--text-2);margin:0 0 4px;line-height:1.5">${guidance}</p>` : ""}
-      ${noFilesMsg}
+      `Review & Import \u2014 ${files.length} file${files.length !== 1 ? "s" : ""} found`,
+      `<div class="import-filter-tabs">${tabsHtml}</div>
+      ${bulkHtml}
       ${tableHtml}
       ${regSection}
-      <div id="import-step2-error" style="color:var(--error);font-size:13px;display:none;margin-top:10px"></div>
+      <div id="import-step3-error" style="color:var(--error);font-size:13px;display:none;margin-top:10px"></div>
       <div class="modal-actions" style="margin-top:12px">
-        <button class="btn btn-ghost" id="btn-import-back">Back</button>
+        <button class="btn btn-ghost" id="btn-import-back">\u2190 Back</button>
         <button class="btn btn-primary" id="btn-commit-import" ${importCount === 0 ? "disabled" : ""}>
           ${importBtnLabel}
         </button>
       </div>`,
       (body) => {
         document.getElementById("modal").classList.add("modal-wide");
-        body.querySelector("#btn-import-back").addEventListener("click", () => showStep1());
+        body.querySelector("#btn-import-back").addEventListener("click", () => showStep2Summary(dir, preview));
 
-        // Sync episode option availability across all dropdowns so no episode
-        // can be linked to more than one file at a time.
+        // Filter tabs
+        const filterMap = {};
+        tabDefs.forEach(t => { filterMap[t.id] = t.filter; });
+        body.querySelectorAll(".import-filter-tab").forEach(tab => {
+          tab.addEventListener("click", () => {
+            body.querySelectorAll(".import-filter-tab").forEach(t => t.classList.remove("active"));
+            tab.classList.add("active");
+            const filterFn = filterMap[tab.dataset.tab];
+            body.querySelectorAll("#import-tbody tr").forEach(tr => {
+              tr.style.display = filterFn(tr) ? "" : "none";
+            });
+          });
+        });
+
+        // Apply default tab filter
+        if (defaultTab !== "all") {
+          const filterFn = filterMap[defaultTab];
+          body.querySelectorAll("#import-tbody tr").forEach(tr => {
+            tr.style.display = filterFn(tr) ? "" : "none";
+          });
+        }
+
+        // Sync episode option availability across all dropdowns
         function syncEpisodeOptions() {
           const selects = [...body.querySelectorAll(".import-ep-select")];
-          // Collect episode IDs that are currently claimed by some dropdown
-          const claimed = new Set(
-            selects.map(s => s.value).filter(v => v !== "")
-          );
+          const claimed = new Set(selects.map(s => s.value).filter(v => v !== ""));
           selects.forEach(sel => {
             for (const opt of sel.options) {
               if (opt.value === "") continue;
-              // Disable if claimed by a *different* select
               opt.disabled = claimed.has(opt.value) && opt.value !== sel.value;
             }
           });
         }
 
-        // When match dropdown is changed manually, remove confidence badge and
-        // re-sync which episode options are available across all dropdowns.
         body.querySelectorAll(".import-ep-select").forEach(sel => {
           sel.addEventListener("change", () => {
             const row = document.getElementById(`import-row-${sel.dataset.row}`);
@@ -2119,12 +2585,10 @@ function showImportFilesModal(feedId, feed) {
             syncEpisodeOptions();
           });
         });
-
-        // Run once on open so pre-matched rows already block their episodes
         syncEpisodeOptions();
 
         const commitBtn = body.querySelector("#btn-commit-import");
-        const errEl     = body.querySelector("#import-step2-error");
+        const errEl     = body.querySelector("#import-step3-error");
 
         function updateImportBtn() {
           const n = body.querySelectorAll("#import-tbody .import-skip-chk:not(:checked)").length;
@@ -2136,10 +2600,30 @@ function showImportFilesModal(feedId, feed) {
           chk.addEventListener("change", updateImportBtn);
         });
 
+        // Bulk skip buttons
+        body.querySelector("#btn-skip-unmatched")?.addEventListener("click", () => {
+          body.querySelectorAll("#import-tbody tr").forEach(tr => {
+            if (tr.dataset.hasMatch === "0") {
+              const chk = tr.querySelector(".import-skip-chk");
+              if (chk) chk.checked = true;
+            }
+          });
+          updateImportBtn();
+        });
+        body.querySelector("#btn-skip-low-conf")?.addEventListener("click", () => {
+          body.querySelectorAll("#import-tbody tr").forEach(tr => {
+            if (tr.dataset.hasMatch === "1" && parseFloat(tr.dataset.conf) < 0.40) {
+              const chk = tr.querySelector(".import-skip-chk");
+              if (chk) chk.checked = true;
+            }
+          });
+          updateImportBtn();
+        });
+
         commitBtn.addEventListener("click", async () => {
           const items = [];
           body.querySelectorAll("#import-tbody tr").forEach(row => {
-            if (row.querySelector(".import-skip-chk")?.checked) return; // skip excluded
+            if (row.querySelector(".import-skip-chk")?.checked) return;
             const epIdVal = row.querySelector(".import-ep-select")?.value || "";
             items.push({
               path:       row.dataset.path,
@@ -2149,12 +2633,12 @@ function showImportFilesModal(feedId, feed) {
           });
 
           commitBtn.disabled = true;
-          commitBtn.textContent = "Importing…";
+          commitBtn.textContent = "Importing\u2026";
           errEl.style.display = "none";
           try {
             await API.commitImport(feedId, items);
             Modal.close();
-            Toast.success("Import started — check the banner above the episode list for progress.");
+            Toast.success("Import started \u2014 check the banner above the episode list for progress.");
             _pollImportBanner(feedId);
           } catch (e) {
             errEl.textContent = e.message;

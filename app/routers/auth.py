@@ -75,6 +75,7 @@ class SetupCompleteRequest(BaseModel):
     filename_episode_number: Optional[bool] = None
     organize_by_year: Optional[bool] = None
     save_xml: Optional[bool] = None
+    timezone: Optional[str] = None
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -248,6 +249,8 @@ def complete_setup(
         gs.organize_by_year = body.organize_by_year
     if body.save_xml is not None:
         gs.save_xml = body.save_xml
+    if body.timezone is not None:
+        gs.timezone = body.timezone
 
     gs.setup_complete = True
     db.commit()

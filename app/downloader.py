@@ -60,12 +60,47 @@ def _get_max_concurrent() -> int:
     return _cached_max_concurrent
 
 
+def _is_within_download_window() -> bool:
+    """Check if current time falls within the configured download window.
+
+    Returns True (allow downloads) when the window is disabled or on error.
+    """
+    try:
+        from app.database import SessionLocal
+        from zoneinfo import ZoneInfo
+        db = SessionLocal()
+        try:
+            gs = db.query(GlobalSettings).first()
+            if not gs or not gs.download_window_enabled:
+                return True
+            tz = ZoneInfo(gs.timezone or "UTC")
+            now = datetime.now(tz)
+            current = now.hour * 60 + now.minute
+            sh, sm = (int(x) for x in (gs.download_window_start or "21:00").split(":"))
+            eh, em = (int(x) for x in (gs.download_window_end or "06:00").split(":"))
+            start = sh * 60 + sm
+            end = eh * 60 + em
+            if start == end:
+                return True  # 0-minute window = always open
+            if start < end:
+                return start <= current < end
+            else:
+                # Overnight window (e.g. 21:00–06:00)
+                return current >= start or current < end
+        finally:
+            db.close()
+    except Exception:
+        return True
+
+
 def _claim_next() -> int | None:
     """Atomically find the next queued episode and mark it 'downloading'.
 
     Uses a lock so that multiple worker threads can't claim the same episode.
     Returns the episode id, or None if nothing is queued.
     """
+    if not _is_within_download_window():
+        return None
     from app.database import SessionLocal
     with _claim_lock:
         db = SessionLocal()
@@ -247,6 +282,16 @@ def get_podcast_folder(feed: Feed, db: Session) -> str:
     return os.path.join(base_dir, folder_name)
 
 
+def _local_pub_date(dt, tz_name: str):
+    """Convert a naive UTC datetime to the configured timezone for date formatting."""
+    from datetime import timezone as _utctz
+    from zoneinfo import ZoneInfo
+    try:
+        return dt.replace(tzinfo=_utctz.utc).astimezone(ZoneInfo(tz_name))
+    except Exception:
+        return dt
+
+
 def _build_file_path(
     episode: Episode,
     folder_name: str,
@@ -257,6 +302,7 @@ def _build_file_path(
     content_type: Optional[str],
     url: str,
     total_episodes: int = 0,
+    timezone: str = "UTC",
 ) -> str:
     """Construct the target file path for an episode download."""
     import math
@@ -265,7 +311,8 @@ def _build_file_path(
     # Build filename: YYYY-MM-DD - ### - title  (each present part joined by " - ")
     parts = []
     if date_prefix and episode.published_at:
-        parts.append(episode.published_at.strftime("%Y-%m-%d"))
+        pub = _local_pub_date(episode.published_at, timezone)
+        parts.append(pub.strftime("%Y-%m-%d"))
     if episode_number_prefix and episode.seq_number is not None:
         pad = max(3, math.ceil(math.log10(total_episodes + 1))) if total_episodes > 0 else 3
         parts.append(str(episode.seq_number).zfill(pad))
@@ -278,7 +325,8 @@ def _build_file_path(
     # Build directory
     dir_parts = [base_dir, folder_name]
     if organize_by_year and episode.published_at:
-        dir_parts.append(str(episode.published_at.year))
+        pub = _local_pub_date(episode.published_at, timezone)
+        dir_parts.append(str(pub.year))
 
     directory = os.path.join(*dir_parts)
     os.makedirs(directory, exist_ok=True)
@@ -493,6 +541,7 @@ def download_episode(episode_id: int, db: Session) -> None:
     episode_number_prefix = _effective(feed.filename_episode_number, gs.filename_episode_number, True)
     organize_by_year = _effective(feed.organize_by_year, gs.organize_by_year, True)
     save_xml = _effective(feed.save_xml, gs.save_xml, True)
+    timezone = gs.timezone or "UTC"
 
     # Supplementary feeds share the primary feed's folder
     if feed.primary_feed_id:
@@ -536,6 +585,7 @@ def download_episode(episode_id: int, db: Session) -> None:
                     episode, folder_name, base_dir, date_prefix, episode_number_prefix,
                     organize_by_year, content_type, episode.enclosure_url,
                     total_episodes=total_episodes,
+                    timezone=timezone,
                 )
                 tmp_path = target_path + ".part"
 

@@ -76,7 +76,7 @@ async function _doSearch(q) {
     }
     container.innerHTML = eps.map((ep) => {
       const feedTitle = ep.feed_title || "";
-      const date      = ep.published_at ? new Date(ep.published_at).toLocaleDateString() : "";
+      const date      = ep.published_at ? fmt(ep.published_at) : "";
       return `<div class="search-result" tabindex="-1"
                    onclick="hideSearch();window._pendingEpScroll=${ep.id};Router.navigate('/feeds/${ep.feed_id}')">
         <div class="search-result-title">${escHTML(ep.title || "Untitled")}</div>

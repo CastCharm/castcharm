@@ -7,6 +7,8 @@ import threading
 _lock = threading.Lock()
 _active_syncs: set[int] = set()
 _pending_syncs: set[int] = set()  # queued but not yet started
+_xml_regenerating: bool = False
+_opml_generating: bool = False
 
 
 def mark_sync_queued(feed_id: int) -> None:
@@ -34,3 +36,37 @@ def get_syncing_count() -> int:
 def get_syncing_feed_ids() -> list[int]:
     with _lock:
         return list(_active_syncs | _pending_syncs)
+
+
+def mark_xml_regen_start() -> None:
+    global _xml_regenerating
+    with _lock:
+        _xml_regenerating = True
+
+
+def mark_xml_regen_done() -> None:
+    global _xml_regenerating
+    with _lock:
+        _xml_regenerating = False
+
+
+def mark_opml_start() -> None:
+    global _opml_generating
+    with _lock:
+        _opml_generating = True
+
+
+def mark_opml_done() -> None:
+    global _opml_generating
+    with _lock:
+        _opml_generating = False
+
+
+def is_xml_regenerating() -> bool:
+    with _lock:
+        return _xml_regenerating
+
+
+def is_opml_generating() -> bool:
+    with _lock:
+        return _opml_generating

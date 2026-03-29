@@ -79,6 +79,16 @@ def _migrate_db():
         ("global_settings", "auth_username",               "VARCHAR"),
         ("global_settings", "auth_password_hash",          "VARCHAR"),
         ("episodes",        "queued_at",                   "DATETIME"),
+        ("global_settings", "timezone",                    "VARCHAR DEFAULT 'UTC'"),
+        ("global_settings", "scheduled_xml_enabled",        "BOOLEAN DEFAULT 1"),
+        ("global_settings", "scheduled_xml_time",           "VARCHAR DEFAULT '00:00'"),
+        ("global_settings", "scheduled_opml_enabled",       "BOOLEAN DEFAULT 1"),
+        ("global_settings", "scheduled_opml_time",          "VARCHAR DEFAULT '00:00'"),
+        ("global_settings", "scheduled_sync_enabled",       "BOOLEAN DEFAULT 0"),
+        ("global_settings", "scheduled_sync_time",          "VARCHAR DEFAULT '03:00'"),
+        ("global_settings", "download_window_enabled",      "BOOLEAN DEFAULT 0"),
+        ("global_settings", "download_window_start",        "VARCHAR DEFAULT '21:00'"),
+        ("global_settings", "download_window_end",          "VARCHAR DEFAULT '06:00'"),
     ]
     with engine.connect() as conn:
         for table, column, col_def in migrations:

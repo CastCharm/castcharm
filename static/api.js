@@ -57,10 +57,12 @@ const API = {
   delete: (p)    => API.request("DELETE", p),
 
   // ── Settings ────────────────────────────────────────────────
-  getSettings:  () =>  API.get("/api/settings"),
-  putSettings:  (b) => API.put("/api/settings", b),
-  getID3Tags:   () =>  API.get("/api/settings/id3-tags"),
-  getRSSSources: () => API.get("/api/settings/rss-sources"),
+  getSettings:      () =>  API.get("/api/settings"),
+  putSettings:      (b) => API.put("/api/settings", b),
+  getID3Tags:       () =>  API.get("/api/settings/id3-tags"),
+  getRSSSources:    () =>  API.get("/api/settings/rss-sources"),
+  getServerTimezone: () => API.get("/api/settings/server-timezone"),
+  getTimezones:     () =>  API.get("/api/settings/timezones"),
   getLogs: (limit = 500, level = null) => {
     const p = new URLSearchParams({ limit });
     if (level) p.set("level", level);
@@ -174,5 +176,7 @@ const API = {
   importOpml: (file) => _upload("/api/feeds/opml", "file", file),
 
   // ── Feed XML import ──────────────────────────────────────────
-  uploadFeedXml: (id, file) => _upload(`/api/feeds/${id}/import-feed-xml`, "file", file),
+  uploadFeedXml:   (id, file) => _upload(`/api/feeds/${id}/import-feed-xml`, "file", file),
+  previewFeedXml:  (id, file) => _upload(`/api/feeds/${id}/preview-feed-xml`, "file", file),
+  commitFeedXml:   (id, tempId, resolutions) => API.post(`/api/feeds/${id}/commit-feed-xml`, { temp_id: tempId, resolutions }),
 };
