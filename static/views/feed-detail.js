@@ -193,25 +193,57 @@ function _buildDlBtnHtml(feed, queueCount = 0) {
   const caretToggle = `const w=this.closest('.ep-more-wrap');w.toggleAttribute('data-open');document.querySelectorAll('.ep-more-wrap[data-open]').forEach(el=>el!==w&&el.removeAttribute('data-open'))`;
   const caret = svg('<polyline points="6 9 12 15 18 9"/>');
 
-  // Build the download button(s) — always shown and always clickable.
+  // Build the download button(s).
+  const hasAvailable = feed?.available_count > 0;
+  const hasUnplayed  = feed?.unplayed_available_count > 0;
+  const activeDownloads = queueCount > 0;
+
   let btnHtml = "";
-  if (feed && feed.available_count > 0) {
-    if (feed.unplayed_available_count > 0) {
+  if (hasUnplayed) {
+    // Active split button: "Download Unplayed" primary + "Download All" in dropdown
+    btnHtml = `<div class="ep-more-wrap" onclick="event.stopPropagation()">
+      <button class="btn btn-primary btn-sm btn-split-main" id="btn-dl-unplayed-feed">
+        ${dlIcon} Download Unplayed (${feed.unplayed_available_count})
+      </button>
+      <button class="btn btn-primary btn-sm btn-split-caret" onclick="${caretToggle}">${caret}</button>
+      <div class="ep-more-dropdown" style="right:0;left:auto;min-width:190px">
+        <button id="btn-dl-unplayed-feed-dd">Download Unplayed (${feed.unplayed_available_count})</button>
+        <button id="btn-dl-all-feed">Download All (${feed.available_count})</button>
+      </div>
+    </div>`;
+  } else if (hasAvailable) {
+    if (activeDownloads) {
+      // Unplayed all queued; played episodes still pending — disabled unplayed + active download-all
       btnHtml = `<div class="ep-more-wrap" onclick="event.stopPropagation()">
-        <button class="btn btn-primary btn-sm btn-split-main" id="btn-dl-unplayed-feed">
-          ${dlIcon} Download Unplayed (${feed.unplayed_available_count})
+        <button class="btn btn-primary btn-sm btn-split-main" id="btn-dl-unplayed-feed" disabled
+                title="All unplayed episodes are queued or downloaded">
+          ${dlIcon} Download Unplayed
         </button>
         <button class="btn btn-primary btn-sm btn-split-caret" onclick="${caretToggle}">${caret}</button>
         <div class="ep-more-dropdown" style="right:0;left:auto;min-width:190px">
-          <button id="btn-dl-unplayed-feed-dd">Download Unplayed (${feed.unplayed_available_count})</button>
+          <button id="btn-dl-unplayed-feed-dd" disabled>Download Unplayed</button>
           <button id="btn-dl-all-feed">Download All (${feed.available_count})</button>
         </div>
       </div>`;
     } else {
+      // No unplayed pending, no active downloads — just "Download All"
       btnHtml = `<button class="btn btn-primary btn-sm" id="btn-dl-all-feed">
         ${dlIcon} Download All (${feed.available_count})
       </button>`;
     }
+  } else if (activeDownloads) {
+    // Everything queued or downloading — show disabled buttons
+    btnHtml = `<div class="ep-more-wrap" onclick="event.stopPropagation()">
+      <button class="btn btn-primary btn-sm btn-split-main" id="btn-dl-unplayed-feed" disabled
+              title="All unplayed episodes are queued or downloaded">
+        ${dlIcon} Download Unplayed
+      </button>
+      <button class="btn btn-primary btn-sm btn-split-caret" disabled>${caret}</button>
+      <div class="ep-more-dropdown" style="right:0;left:auto;min-width:190px">
+        <button id="btn-dl-unplayed-feed-dd" disabled>Download Unplayed</button>
+        <button id="btn-dl-all-feed" disabled>Download All</button>
+      </div>
+    </div>`;
   }
 
   // When downloads are in progress, append a compact indicator + cancel — but keep
@@ -605,7 +637,7 @@ async function viewFeedDetail(feedId) {
             ${feed.hidden_count > 0 ? `<button class="btn btn-ghost btn-sm" id="btn-show-hidden">
               Show Hidden
             </button>` : ""}
-            ${feed.downloaded_count > 0 ? `<button class="btn btn-ghost btn-sm" id="btn-mark-all-played">Mark all played</button>` : ""}
+            ${feed.episode_count > 0 ? `<button class="btn btn-ghost btn-sm" id="btn-mark-all-played">Mark all played</button>` : ""}
             <span id="dl-btn-area">${_buildDlBtnHtml(feed, initialQueueCount)}</span>
             <svg class="panel-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="6 9 12 15 18 9"/>
@@ -773,20 +805,9 @@ async function viewFeedDetail(feedId) {
       const r = await API.markAllPlayed(id);
       Toast.success(`${r.updated} episode${r.updated !== 1 ? "s" : ""} marked as played`);
       updateStatus();
-      document.querySelectorAll("#episode-list .episode-item").forEach((row) => {
-        if (row.dataset.played === "1") return;
-        row.dataset.played = "1";
-        const titleEl = row.querySelector(".episode-title");
-        if (titleEl && !titleEl.querySelector(".ep-played-dot")) {
-          titleEl.insertAdjacentHTML("afterbegin", '<span class="ep-played-dot" title="Played"></span>');
-        }
-        const markBtn = [...row.querySelectorAll(".btn-icon")].find((b) => b.title === "Mark as played");
-        if (markBtn) {
-          markBtn.title = "Mark as unplayed";
-          markBtn.innerHTML = svg('<polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.5"/>');
-        }
-      });
-      await _refreshFeedStats();
+      await Promise.all([_refreshEpisodeList(), _refreshFeedStats()]);
+      // _refreshFeedStats updates window._epState.feed with fresh counts; rebuild buttons now
+      _rebuildDlArea(0);
       btn.disabled = false;
       btn.textContent = "Mark all played";
     } catch (e) {
@@ -1001,14 +1022,29 @@ async function viewFeedDetail(feedId) {
     _feedDLPollTick(); // immediate first tick
   }
 
+  function _disableDlBtns() {
+    ["btn-dl-unplayed-feed", "btn-dl-unplayed-feed-dd", "btn-dl-all-feed",
+     "btn-split-caret"].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = true;
+    });
+    // Also disable any caret button adjacent to the split main
+    document.querySelectorAll("#dl-btn-area .btn-split-caret").forEach(el => { el.disabled = true; });
+  }
+
   function _wireDlBtns() {
-    document.getElementById("btn-dl-unplayed-feed")?.addEventListener("click", _doDownloadUnplayed);
+    document.getElementById("btn-dl-unplayed-feed")?.addEventListener("click", () => {
+      _disableDlBtns();
+      _doDownloadUnplayed();
+    });
     document.getElementById("btn-dl-unplayed-feed-dd")?.addEventListener("click", (e) => {
       e.currentTarget.closest(".ep-more-wrap")?.removeAttribute("data-open");
+      _disableDlBtns();
       _doDownloadUnplayed();
     });
     document.getElementById("btn-dl-all-feed")?.addEventListener("click", (e) => {
       e.currentTarget.closest(".ep-more-wrap")?.removeAttribute("data-open");
+      _disableDlBtns();
       _doDownloadAll();
     });
     document.getElementById("btn-dl-cancel-feed")?.addEventListener("click", async () => {
@@ -1029,6 +1065,9 @@ async function viewFeedDetail(feedId) {
       updateStatus();
       if (r.queued > 0) {
         Toast.info(`Queued ${r.queued} unplayed episode${r.queued !== 1 ? "s" : ""} for download`);
+        // Zero out unplayed count so the rebuilt button renders disabled
+        const feed = window._epState?.feed;
+        if (feed) feed.unplayed_available_count = 0;
         _rebuildDlArea(r.queued);
         _startFeedDLPoll();
       } else {
@@ -1043,6 +1082,9 @@ async function viewFeedDetail(feedId) {
       updateStatus();
       if (r.queued > 0) {
         Toast.info(`Queued ${r.queued} episode${r.queued !== 1 ? "s" : ""} for download`);
+        // Zero out both counts so the rebuilt buttons render disabled
+        const feed = window._epState?.feed;
+        if (feed) { feed.available_count = 0; feed.unplayed_available_count = 0; }
         _rebuildDlArea(r.queued);
         _startFeedDLPoll();
       } else {

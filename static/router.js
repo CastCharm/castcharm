@@ -177,6 +177,14 @@ function startStatusPolling() {
   }, _statusBusy ? 3000 : 10000);
 }
 
+function _fmtTime(isoStr) {
+  if (!isoStr) return "";
+  const hasOffset = isoStr.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(isoStr);
+  const d = new Date(hasOffset ? isoStr : isoStr + "Z");
+  if (isNaN(d)) return isoStr;
+  return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+}
+
 function _statusItem(dotClass, main, sub) {
   return `<div class="status-item">
     <span class="status-dot ${dotClass}"></span>
@@ -223,8 +231,20 @@ async function updateStatus() {
         items.push(_statusItem("active",
           `Importing files${n > 1 ? ` (${n} podcasts)` : ""}`, "Reading audio file metadata…"));
       }
+      if (s.xml_regenerating) {
+        items.push(_statusItem("active", "Regenerating feed files", "Rebuilding complete-feed.xml for all podcasts…"));
+      }
+      if (s.opml_generating) {
+        items.push(_statusItem("active", "Exporting OPML", "Writing castcharm-export.opml…"));
+      }
 
       // — Persistent warnings —
+      if (s.download_window_paused) {
+        const sub = s.download_window_next_open
+          ? `Resumes at ${_fmtTime(s.download_window_next_open)}`
+          : "Downloads are queued";
+        items.push(_statusItem("warn", "Downloads paused", sub));
+      }
       if (s.episodes_failed > 0) {
         items.push(_statusItem("warn",
           `${s.episodes_failed} episode${s.episodes_failed > 1 ? "s" : ""} failed to download`,
@@ -233,15 +253,24 @@ async function updateStatus() {
 
       // — Idle / ready —
       if (items.length === 0) {
-        let sub = null;
-        if (s.next_sync_at) {
-          const raw = s.next_sync_at;
-          const ts = raw.includes("Z") || raw.includes("+") ? raw : raw + "Z";
-          const diffMs  = new Date(ts) - Date.now();
-          const diffMin = Math.max(0, Math.round(diffMs / 60000));
-          sub = diffMin < 1 ? "Syncing soon…" : `Next sync in ${diffMin}m`;
-        }
-        items.push(_statusItem("ok", "All good", sub));
+        items.push(_statusItem("ok", "All good", null));
+      }
+
+      // — Next sync (always shown when scheduled, hidden while actively syncing) —
+      if (s.next_sync_at && !((s.syncing_count ?? 0) > 0)) {
+        const raw = s.next_sync_at;
+        const hasOffset = raw.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(raw);
+        const ts = hasOffset ? raw : raw + "Z";
+        const diffMs  = new Date(ts) - Date.now();
+        const diffMin = Math.max(0, Math.round(diffMs / 60000));
+        const syncLabel = diffMin < 1 ? "Syncing soon…"
+          : diffMin < 60 ? `Next sync in ${diffMin}m`
+          : (() => {
+              const h = Math.floor(diffMin / 60);
+              const m = diffMin % 60;
+              return `Next sync in ${h}h${m > 0 ? ` ${m}m` : ""}`;
+            })();
+        items.push(_statusItem("ok", syncLabel, null));
       }
     }
 

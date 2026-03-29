@@ -44,6 +44,19 @@ class GlobalSettings(Base):
     auth_password_hash = Column(String, nullable=True)
     # IANA timezone name used for filename date formatting and year folders
     timezone = Column(String, default="UTC")
+    # Scheduled daily XML regeneration (rebuild complete-feed.xml for all feeds)
+    scheduled_xml_enabled = Column(Boolean, default=True)
+    scheduled_xml_time = Column(String, default="00:00")
+    # Scheduled daily OPML export to download folder root
+    scheduled_opml_enabled = Column(Boolean, default=True)
+    scheduled_opml_time = Column(String, default="00:00")
+    # Daily sync mode (replaces interval-based sync when enabled)
+    scheduled_sync_enabled = Column(Boolean, default=False)
+    scheduled_sync_time = Column(String, default="03:00")
+    # Download window (restrict downloads to a time range; HH:MM in user's timezone)
+    download_window_enabled = Column(Boolean, default=False)
+    download_window_start = Column(String, default="21:00")
+    download_window_end = Column(String, default="06:00")
 
 
 class AuthSession(Base):

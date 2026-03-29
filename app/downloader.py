@@ -60,12 +60,47 @@ def _get_max_concurrent() -> int:
     return _cached_max_concurrent
 
 
+def _is_within_download_window() -> bool:
+    """Check if current time falls within the configured download window.
+
+    Returns True (allow downloads) when the window is disabled or on error.
+    """
+    try:
+        from app.database import SessionLocal
+        from zoneinfo import ZoneInfo
+        db = SessionLocal()
+        try:
+            gs = db.query(GlobalSettings).first()
+            if not gs or not gs.download_window_enabled:
+                return True
+            tz = ZoneInfo(gs.timezone or "UTC")
+            now = datetime.now(tz)
+            current = now.hour * 60 + now.minute
+            sh, sm = (int(x) for x in (gs.download_window_start or "21:00").split(":"))
+            eh, em = (int(x) for x in (gs.download_window_end or "06:00").split(":"))
+            start = sh * 60 + sm
+            end = eh * 60 + em
+            if start == end:
+                return True  # 0-minute window = always open
+            if start < end:
+                return start <= current < end
+            else:
+                # Overnight window (e.g. 21:00–06:00)
+                return current >= start or current < end
+        finally:
+            db.close()
+    except Exception:
+        return True
+
+
 def _claim_next() -> int | None:
     """Atomically find the next queued episode and mark it 'downloading'.
 
     Uses a lock so that multiple worker threads can't claim the same episode.
     Returns the episode id, or None if nothing is queued.
     """
+    if not _is_within_download_window():
+        return None
     from app.database import SessionLocal
     with _claim_lock:
         db = SessionLocal()

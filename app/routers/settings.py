@@ -92,6 +92,22 @@ def update_settings(body: GlobalSettingsUpdate, db: Session = Depends(get_db)):
     if "max_concurrent_downloads" in updates:
         from app import downloader as _dl
         _dl._cached_max_concurrent = None  # force re-read on next enqueue
+    # Reschedule cron jobs when schedule-related settings change
+    _schedule_fields = {
+        "scheduled_xml_enabled", "scheduled_xml_time",
+        "scheduled_opml_enabled", "scheduled_opml_time",
+        "scheduled_sync_enabled", "scheduled_sync_time",
+        "timezone",
+    }
+    changed = set(updates.keys())
+    if changed & _schedule_fields:
+        from app.scheduler import schedule_xml_regen, schedule_opml_export, schedule_daily_sync
+        if changed & {"scheduled_xml_enabled", "scheduled_xml_time", "timezone"}:
+            schedule_xml_regen()
+        if changed & {"scheduled_opml_enabled", "scheduled_opml_time", "timezone"}:
+            schedule_opml_export()
+        if changed & {"scheduled_sync_enabled", "scheduled_sync_time", "timezone"}:
+            schedule_daily_sync()
     log.info("Settings updated: %s", ", ".join(updates.keys()))
     return settings
 

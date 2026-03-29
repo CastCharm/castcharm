@@ -25,6 +25,15 @@ class GlobalSettingsBase(BaseModel):
     theme: str = "midnight"
     show_suggested_listening: bool = True
     timezone: str = "UTC"
+    scheduled_xml_enabled: bool = True
+    scheduled_xml_time: str = "00:00"
+    scheduled_opml_enabled: bool = True
+    scheduled_opml_time: str = "00:00"
+    scheduled_sync_enabled: bool = False
+    scheduled_sync_time: str = "03:00"
+    download_window_enabled: bool = False
+    download_window_start: str = "21:00"
+    download_window_end: str = "06:00"
 
 
 class GlobalSettingsUpdate(BaseModel):
@@ -45,6 +54,15 @@ class GlobalSettingsUpdate(BaseModel):
     theme: Optional[str] = None
     show_suggested_listening: Optional[bool] = None
     timezone: Optional[str] = None
+    scheduled_xml_enabled: Optional[bool] = None
+    scheduled_xml_time: Optional[str] = None
+    scheduled_opml_enabled: Optional[bool] = None
+    scheduled_opml_time: Optional[str] = None
+    scheduled_sync_enabled: Optional[bool] = None
+    scheduled_sync_time: Optional[str] = None
+    download_window_enabled: Optional[bool] = None
+    download_window_start: Optional[str] = None
+    download_window_end: Optional[str] = None
 
 
 class GlobalSettingsOut(GlobalSettingsBase):
@@ -216,6 +234,10 @@ class StatusOut(BaseModel):
     scanning: bool = False     # startup folder scan in progress
     downloading_feed_ids: list[int] = []  # primary feed IDs with queued/active downloads
     syncing_feed_ids: list[int] = []      # feed IDs currently syncing (active + pending)
+    xml_regenerating: bool = False        # complete-feed.xml rebuild in progress
+    opml_generating: bool = False         # OPML export in progress
+    download_window_paused: bool = False  # downloads paused (outside window)
+    download_window_next_open: Optional[datetime] = None  # next time window opens
 
 
 # ---------------------------------------------------------------------------

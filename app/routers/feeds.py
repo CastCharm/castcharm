@@ -643,7 +643,7 @@ def mark_all_played(feed_id: int, db: Session = Depends(get_db)):
     all_ids = get_group_feed_ids(db, feed_id)
     episodes = (
         db.query(Episode)
-        .filter(Episode.feed_id.in_(all_ids), Episode.status == "downloaded", Episode.played.is_(False))
+        .filter(Episode.feed_id.in_(all_ids), Episode.played.is_(False))
         .all()
     )
     now = datetime.utcnow()
