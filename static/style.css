@@ -1206,6 +1206,17 @@ select.form-control { appearance: none; background-image: url("data:image/svg+xm
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
+@keyframes suggest-fade-out {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+@keyframes suggest-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.suggest-fade-out { animation: suggest-fade-out 0.25s ease forwards; }
+.suggest-fade-in  { animation: suggest-fade-in  0.4s  ease forwards; }
+
 /* =========================================================
    Empty states
    ========================================================= */
