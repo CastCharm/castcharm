@@ -34,6 +34,9 @@ class GlobalSettingsBase(BaseModel):
     download_window_enabled: bool = False
     download_window_start: str = "21:00"
     download_window_end: str = "06:00"
+    autoclean_enabled: bool = False
+    autoclean_mode: str = "recent"
+    autoclean_time: str = "02:00"
 
 
 class GlobalSettingsUpdate(BaseModel):
@@ -63,6 +66,9 @@ class GlobalSettingsUpdate(BaseModel):
     download_window_enabled: Optional[bool] = None
     download_window_start: Optional[str] = None
     download_window_end: Optional[str] = None
+    autoclean_enabled: Optional[bool] = None
+    autoclean_mode: Optional[str] = None
+    autoclean_time: Optional[str] = None
 
 
 class GlobalSettingsOut(GlobalSettingsBase):
@@ -118,6 +124,9 @@ class FeedUpdate(BaseModel):
     custom_image_url: Optional[str] = None
     keep_latest: Optional[int] = None
     keep_unplayed: Optional[bool] = None
+    autoclean_enabled: Optional[bool] = None
+    autoclean_mode: Optional[str] = None
+    autoclean_exclude: Optional[bool] = None
 
 
 class FeedOut(BaseModel):
@@ -163,6 +172,9 @@ class FeedOut(BaseModel):
     keep_latest: Optional[int] = None
     podcast_folder: Optional[str] = None  # effective on-disk folder for this podcast
     keep_unplayed: bool = True
+    autoclean_enabled: bool = False
+    autoclean_mode: Optional[str] = None
+    autoclean_exclude: bool = False
 
     model_config = {"from_attributes": True}
 

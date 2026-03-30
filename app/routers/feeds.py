@@ -1060,12 +1060,6 @@ def _bg_sync(feed_id: int):
         except Exception:
             pass  # best-effort
         log.info("Sync complete: %s (id=%d)", feed.title or feed.url, feed_id)
-        # Auto-cleanup: delete oldest files beyond keep_latest limit
-        try:
-            from app.cleanup import run_keep_latest_cleanup
-            run_keep_latest_cleanup(primary_id, db)
-        except Exception:
-            pass  # cleanup is best-effort
     finally:
         mark_sync_done(feed_id)
         db.close()
@@ -1279,12 +1273,23 @@ async def commit_feed_xml(
 
 @router.get("/{feed_id}/cleanup-preview")
 def cleanup_preview(feed_id: int, db: Session = Depends(get_db)):
-    """Return how many files would be deleted by keep_latest cleanup without deleting them."""
+    """Return how many files would be deleted by cleanup without deleting them."""
     from app.cleanup import preview_keep_latest_cleanup
     feed = db.query(Feed).filter(Feed.id == feed_id).first()
     if not feed:
         raise HTTPException(status_code=404, detail="Feed not found")
     return preview_keep_latest_cleanup(feed_id, db)
+
+
+@router.post("/{feed_id}/autoclean/run")
+def run_feed_autoclean(feed_id: int, db: Session = Depends(get_db)):
+    """Immediately run auto-cleanup for a specific feed."""
+    from app.cleanup import run_keep_latest_cleanup
+    feed = db.query(Feed).filter(Feed.id == feed_id).first()
+    if not feed:
+        raise HTTPException(status_code=404, detail="Feed not found")
+    deleted = run_keep_latest_cleanup(feed_id, db)
+    return {"deleted": len(deleted)}
 
 
 @router.post("/from-xml", response_model=FeedOut, status_code=201)

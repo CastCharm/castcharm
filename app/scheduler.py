@@ -20,6 +20,7 @@ def start_scheduler():
         schedule_xml_regen()
         schedule_opml_export()
         schedule_daily_sync()  # may remove per-feed jobs if daily mode is active
+        schedule_autoclean()
 
 
 def stop_scheduler():
@@ -364,6 +365,46 @@ def schedule_opml_export():
         misfire_grace_time=3600,
     )
     log.info("Scheduled OPML export at %02d:%02d (%s)", hour, minute, tz)
+
+
+# ---------------------------------------------------------------------------
+# Scheduled auto-cleanup
+# ---------------------------------------------------------------------------
+
+def _run_scheduled_autoclean():
+    """Run keep_latest cleanup across all active feeds on schedule."""
+    from app.database import SessionLocal
+    from app.cleanup import run_autoclean_all_feeds
+
+    db = SessionLocal()
+    try:
+        run_autoclean_all_feeds(db)
+    finally:
+        db.close()
+
+
+def schedule_autoclean():
+    """Create/update the daily auto-cleanup cron job."""
+    if _scheduler.get_job("scheduled_autoclean"):
+        _scheduler.remove_job("scheduled_autoclean")
+
+    gs = _read_settings()
+    if not gs or not gs.autoclean_enabled:
+        return  # autoclean disabled
+    mode = gs.autoclean_mode or "recent"
+    if mode != "unplayed" and not gs.keep_latest:
+        return  # "recent" mode requires a keep_latest count
+
+    hour, minute = _parse_time(gs.autoclean_time or "02:00")
+    tz = gs.timezone or "UTC"
+    _scheduler.add_job(
+        _run_scheduled_autoclean,
+        CronTrigger(hour=hour, minute=minute, timezone=tz),
+        id="scheduled_autoclean",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+    log.info("Auto-cleanup scheduled at %02d:%02d (%s)", hour, minute, tz)
 
 
 # ---------------------------------------------------------------------------
