@@ -152,16 +152,16 @@ async function viewDownloads() {
       </div>
 
       <div class="tabs" id="dl-tabs">
-        <button class="tab-btn active" data-tab="available" onclick="switchDLTab('available', this)">
+        <button class="tab-btn active" data-tab="available" data-action="dl-tab">
           Available${totalAvailable > 0 ? ` <span class="badge badge-primary" style="margin-left:4px">${totalAvailable}</span>` : ""}
         </button>
-        <button class="tab-btn" data-tab="inprogress" onclick="switchDLTab('inprogress', this)">
+        <button class="tab-btn" data-tab="inprogress" data-action="dl-tab">
           In Progress${inProgressTotal > 0 ? ` <span class="badge badge-warning" style="margin-left:4px" id="badge-inprogress">${inProgressTotal}</span>` : '<span id="badge-inprogress"></span>'}
         </button>
-        <button class="tab-btn" data-tab="downloaded" onclick="switchDLTab('downloaded', this)">
+        <button class="tab-btn" data-tab="downloaded" data-action="dl-tab">
           Downloaded
         </button>
-        <button class="tab-btn" data-tab="failed" onclick="switchDLTab('failed', this)">
+        <button class="tab-btn" data-tab="failed" data-action="dl-tab">
           Failed${failed.length > 0 ? ` <span class="badge badge-error" style="margin-left:4px" id="badge-failed">${failed.length}</span>` : '<span id="badge-failed"></span>'}
         </button>
       </div>
@@ -208,18 +208,18 @@ function renderAvailableFeeds(feeds) {
   let globalBtns = "";
   if (totalAvail > 0) {
     if (totalUnplayed > 0) {
-      globalBtns = `<div class="ep-more-wrap" onclick="event.stopPropagation()">
-        <button class="btn btn-primary btn-split-main" onclick="_doGlobalUnplayed()">
+      globalBtns = `<div class="ep-more-wrap" data-action="stop-prop">
+        <button class="btn btn-primary btn-split-main" data-action="dl-global-unplayed">
           ${dlIcon} Download All Unplayed (${totalUnplayed})
         </button>
-        <button class="btn btn-primary btn-split-caret" onclick="${caretToggle}">${caret}</button>
+        <button class="btn btn-primary btn-split-caret" data-action="toggle-more-wrap">${caret}</button>
         <div class="ep-more-dropdown" style="right:0;left:auto;min-width:220px">
-          <button onclick="this.closest('.ep-more-wrap').removeAttribute('data-open');_doGlobalUnplayed()">Download All Unplayed (${totalUnplayed})</button>
-          <button onclick="this.closest('.ep-more-wrap').removeAttribute('data-open');_doGlobalAll()">Download All (${totalAvail})</button>
+          <button data-action="dl-global-unplayed">Download All Unplayed (${totalUnplayed})</button>
+          <button data-action="dl-global-all">Download All (${totalAvail})</button>
         </div>
       </div>`;
     } else {
-      globalBtns = `<button class="btn btn-primary" onclick="_doGlobalAll()">
+      globalBtns = `<button class="btn btn-primary" data-action="dl-global-all">
         ${dlIcon} Download All (${totalAvail})
       </button>`;
     }
@@ -237,12 +237,12 @@ function renderAvailableFeeds(feeds) {
 
   return `<div class="card">${actionBar}<div class="episode-list">${feeds.map((f) => `
     <div class="episode-item">
-      <div class="episode-art" style="cursor:pointer" onclick="Router.navigate('/feeds/${f.id}')">
+      <div class="episode-art" style="cursor:pointer" data-action="navigate" data-path="/feeds/${f.id}">
         ${f.image_url
-          ? `<img src="${f.image_url}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" /><div class="episode-art-placeholder" style="display:none">${_PODCAST_SVG}</div>`
+          ? `<img src="${f.image_url}" alt="" loading="lazy" /><div class="episode-art-placeholder" style="display:none">${_PODCAST_SVG}</div>`
           : `<div class="episode-art-placeholder">${_PODCAST_SVG}</div>`}
       </div>
-      <div class="episode-info" style="cursor:pointer" onclick="Router.navigate('/feeds/${f.id}')">
+      <div class="episode-info" style="cursor:pointer" data-action="navigate" data-path="/feeds/${f.id}">
         <div class="episode-title">${f.title || f.url}</div>
         <div class="episode-meta">
           ${f.downloaded_count > 0 ? `<span>${f.downloaded_count} downloaded</span>` : ""}
@@ -253,21 +253,20 @@ function renderAvailableFeeds(feeds) {
         ${(() => {
           const dlIcon = svg('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>');
           const caret = svg('<polyline points="6 9 12 15 18 9"/>');
-          const caretToggle = `const w=this.closest('.ep-more-wrap');w.toggleAttribute('data-open');if(w.hasAttribute('data-open')){const d=w.querySelector('.ep-more-dropdown');if(d)positionDropdown(d);}document.querySelectorAll('.ep-more-wrap[data-open]').forEach(el=>el!==w&&el.removeAttribute('data-open'))`;
           const unplayed = f.unplayed_available_count || 0;
           if (unplayed > 0) {
-            return `<div class="ep-more-wrap" onclick="event.stopPropagation()">
-              <button class="btn btn-primary btn-sm btn-split-main" onclick="downloadFeedFromDL(${f.id},'unplayed',this)">
+            return `<div class="ep-more-wrap" data-action="stop-prop">
+              <button class="btn btn-primary btn-sm btn-split-main" data-action="dl-feed" data-feed-id="${f.id}" data-mode="unplayed">
                 ${dlIcon} Unplayed (${unplayed})
               </button>
-              <button class="btn btn-primary btn-sm btn-split-caret" onclick="${caretToggle}">${caret}</button>
+              <button class="btn btn-primary btn-sm btn-split-caret" data-action="toggle-more-wrap">${caret}</button>
               <div class="ep-more-dropdown" style="right:0;left:auto;min-width:180px">
-                <button onclick="this.closest('.ep-more-wrap').removeAttribute('data-open');downloadFeedFromDL(${f.id},'unplayed',this)">Download Unplayed (${unplayed})</button>
-                <button onclick="this.closest('.ep-more-wrap').removeAttribute('data-open');downloadFeedFromDL(${f.id},'all',this)">Download All (${f.available_count})</button>
+                <button data-action="dl-feed" data-feed-id="${f.id}" data-mode="unplayed">Download Unplayed (${unplayed})</button>
+                <button data-action="dl-feed" data-feed-id="${f.id}" data-mode="all">Download All (${f.available_count})</button>
               </div>
             </div>`;
           } else {
-            return `<button class="btn btn-primary btn-sm" onclick="downloadFeedFromDL(${f.id},'all',this)">
+            return `<button class="btn btn-primary btn-sm" data-action="dl-feed" data-feed-id="${f.id}" data-mode="all">
               ${dlIcon} Download All (${f.available_count})
             </button>`;
           }
@@ -280,7 +279,7 @@ function _showMoreFooter(tabId, currentCount, offset) {
   // Show "Show More" if we got a full page (might be more)
   if (currentCount < 100) return "";
   return `<div id="dl-show-more-bar" style="padding:12px 14px;text-align:center;border-top:1px solid var(--border)">
-    <button class="btn btn-ghost btn-sm" onclick="_dlLoadMore('${tabId}', ${offset + currentCount})">
+    <button class="btn btn-ghost btn-sm" data-action="dl-load-more" data-tab="${tabId}" data-offset="${offset + currentCount}">
       Show More
     </button>
   </div>`;
@@ -303,7 +302,7 @@ function _renderDownloadedTab(episodes, offset = 0) {
   const bar = episodes.length > 0
     ? `<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--border)">
          <span data-shown style="font-size:13px;color:var(--text-2)">${offset + episodes.length} shown</span>
-         <button class="btn btn-ghost btn-sm" onclick="_clearDLList()">
+         <button class="btn btn-ghost btn-sm" data-action="dl-clear-list">
            ${svg('<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/>')}
            Clear List
          </button>
@@ -353,7 +352,7 @@ window._dlLoadMore = async function(tabId, offset) {
     list.insertAdjacentHTML("beforeend", episodes.map(renderDLRow).join(""));
     if (episodes.length >= 100) {
       list.closest(".card").insertAdjacentHTML("beforeend", `<div id="dl-show-more-bar" style="padding:12px 14px;text-align:center;border-top:1px solid var(--border)">
-        <button class="btn btn-ghost btn-sm" onclick="_dlLoadMore('${tabId}', ${offset + episodes.length})">
+        <button class="btn btn-ghost btn-sm" data-action="dl-load-more" data-tab="${tabId}" data-offset="${offset + episodes.length}">
           Show More
         </button>
       </div>`);
@@ -770,25 +769,25 @@ function renderDLRow(ep) {
 
   let actionBtn = "";
   if ((ep.status === "pending" || ep.status === "failed") && ep.enclosure_url) {
-    actionBtn = `<button class="btn btn-ghost btn-sm" onclick="queueEpisodeDL(${ep.id})">
+    actionBtn = `<button class="btn btn-ghost btn-sm" data-action="dl-queue" data-ep-id="${ep.id}">
       ${svg('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>')}
       Download
     </button>`;
   } else if (ep.status === "queued" || ep.status === "downloading") {
-    actionBtn = `<button class="btn btn-ghost btn-sm btn-icon" title="Cancel download" onclick="cancelEpisodeDL(${ep.id})">
+    actionBtn = `<button class="btn btn-ghost btn-sm btn-icon" title="Cancel download" data-action="dl-cancel" data-ep-id="${ep.id}">
       ${svg('<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>')}
     </button>`;
   } else if (ep.status === "failed") {
     actionBtn = `<div style="display:flex;gap:4px">
-      ${ep.enclosure_url ? `<button class="btn btn-ghost btn-sm" onclick="queueEpisodeDL(${ep.id})" title="Retry">
+      ${ep.enclosure_url ? `<button class="btn btn-ghost btn-sm" data-action="dl-queue" data-ep-id="${ep.id}" title="Retry">
         ${svg('<polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.5"/>')}
       </button>` : ""}
-      <button class="btn btn-ghost btn-sm btn-icon" onclick="dismissEpisodeDL(${ep.id})" title="Remove">
+      <button class="btn btn-ghost btn-sm btn-icon" data-action="dl-dismiss" data-ep-id="${ep.id}" title="Remove">
         ${svg('<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>')}
       </button>
     </div>`;
   } else if (ep.status === "downloaded") {
-    actionBtn = `<button class="btn btn-danger btn-sm" onclick="deleteEpisodeFileDL(${ep.id})">
+    actionBtn = `<button class="btn btn-danger btn-sm" data-action="dl-delete" data-ep-id="${ep.id}">
       ${svg('<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/>')}
       Delete
     </button>`;
@@ -797,7 +796,7 @@ function renderDLRow(ep) {
   return `<div class="episode-item" id="dl-ep-${ep.id}" data-status="${ep.status}">
     <div class="episode-art">
       ${imgSrc
-        ? `<img src="${imgSrc}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" /><div class="episode-art-placeholder" style="display:none">${_PODCAST_SVG}</div>`
+        ? `<img src="${imgSrc}" alt="" loading="lazy" /><div class="episode-art-placeholder" style="display:none">${_PODCAST_SVG}</div>`
         : `<div class="episode-art-placeholder">${_PODCAST_SVG}</div>`}
     </div>
     <div class="episode-info">
