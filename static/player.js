@@ -538,13 +538,15 @@ const Player = (() => {
   const _SVG_CHEVRON_DOWN = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="24" height="24"><polyline points="6 9 12 15 18 9"/></svg>`;
 
   const _SVG_BACK30 = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="28" height="28">
-    <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.5"/>
-    <text x="12" y="14" font-size="7" fill="currentColor" stroke="none" font-weight="bold" text-anchor="middle" dominant-baseline="middle">30</text>
+    <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+    <polyline points="3 3 3 8 8 8"/>
+    <text x="12" y="12" font-size="7" fill="currentColor" stroke="none" font-weight="bold" text-anchor="middle" dominant-baseline="central">30</text>
   </svg>`;
 
   const _SVG_FWD30 = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="28" height="28">
-    <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-.49-3.5"/>
-    <text x="12" y="14" font-size="7" fill="currentColor" stroke="none" font-weight="bold" text-anchor="middle" dominant-baseline="middle">30</text>
+    <path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>
+    <polyline points="21 3 21 8 16 8"/>
+    <text x="12" y="12" font-size="7" fill="currentColor" stroke="none" font-weight="bold" text-anchor="middle" dominant-baseline="central">30</text>
   </svg>`;
 
   const _SVG_MOON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
