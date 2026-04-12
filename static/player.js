@@ -40,11 +40,9 @@ const Player = (() => {
       const dur = _audio.duration || 0;
       const pct = dur > 0 ? (cur / dur) * 100 : 0;
 
-      // Mini bar progress + buffer
+      // Mini bar progress
       const miniFill = _el("player-mini-progress-fill");
       if (miniFill) miniFill.style.width = pct + "%";
-      const miniBuf = _el("player-mini-buffer-fill");
-      if (miniBuf) miniBuf.style.width = _bufferedPct() + "%";
 
       // Full overlay progress + buffer + thumb — skip while user is dragging
       if (!_dragging) {
@@ -53,8 +51,7 @@ const Player = (() => {
         const thumb = _el("player-full-seek-thumb");
         if (thumb) thumb.style.left = pct + "%";
       }
-      const fullBuf = _el("player-full-buffer-fill");
-      if (fullBuf) fullBuf.style.width = _bufferedPct() + "%";
+      _updateBufFills();
       const timeCur = _el("player-time-current");
       const timeTotal = _el("player-time-total");
       if (timeCur) timeCur.textContent = _fmtTime(cur);
@@ -139,6 +136,12 @@ const Player = (() => {
     _audio.addEventListener("playing", () => _setBuffering(false));
     _audio.addEventListener("canplay",  () => _setBuffering(false));
 
+    // Update buffer fills whenever the browser downloads more data or a seek
+    // completes — timeupdate only fires during active playback, so without
+    // these the fill goes blank after a seek and never recovers.
+    _audio.addEventListener("progress", _updateBufFills);
+    _audio.addEventListener("seeked",   _updateBufFills);
+
     _audio.addEventListener("error", () => {
       if (!_currentEp) return;
       const code = _audio.error?.code;
@@ -194,6 +197,18 @@ const Player = (() => {
       }
     }
     return 0;
+  }
+
+  function _updateBufFills() {
+    if (!_audio || !isFinite(_audio.duration) || _audio.duration === 0) return;
+    const playedPct = (_audio.currentTime / _audio.duration) * 100;
+    const bufPct    = _bufferedPct();
+    const left  = playedPct.toFixed(2) + "%";
+    const width = Math.max(0, bufPct - playedPct).toFixed(2) + "%";
+    const mini = _el("player-mini-buffer-fill");
+    const full = _el("player-full-buffer-fill");
+    if (mini) { mini.style.left = left; mini.style.width = width; }
+    if (full) { full.style.left = left; full.style.width = width; }
   }
 
   function _fmtTime(s) {
@@ -702,21 +717,16 @@ const Player = (() => {
   function init() {
     const bufStyle = document.createElement("style");
     bufStyle.textContent = `
-      /* Buffer fill — sits behind the played fill, uses primary color at low opacity */
-      #player-mini-seek  { position: relative; }
+      /* Buffer fill — covers only the ahead-of-playhead buffered region.
+         left/width are set by JS so it never overlaps the played fill.
+         No CSS transition: timeupdate fires fast enough to look smooth. */
+      #player-mini-seek { position: relative; }
       #player-mini-buffer-fill, #player-full-buffer-fill {
-        position: absolute; top: 0; left: 0; height: 100%; width: 0%;
-        background: var(--primary); opacity: 0.3;
+        position: absolute; top: 0; height: 100%; width: 0%; left: 0%;
+        background: var(--primary); opacity: 0.35;
         border-radius: 3px; pointer-events: none;
-        transition: width 1s linear;
       }
-      /* Played fill must be absolute and above buffer fill */
-      #player-mini-progress-fill, #player-full-progress-fill {
-        position: absolute; top: 0; left: 0; height: 100%;
-        z-index: 1;
-      }
-      #player-full-seek-thumb { z-index: 2; }
-      /* Stall pulse animates only the buffer fill, not the played fill */
+      /* Stall pulse on the buffer fill only */
       @keyframes _player-pulse { 0%,100%{opacity:.35} 50%{opacity:.1} }
       .player-buffering #player-mini-buffer-fill,
       .player-buffering #player-full-buffer-fill {
