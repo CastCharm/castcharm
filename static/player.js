@@ -68,8 +68,10 @@ const Player = (() => {
       if (_currentEp && !_autoPlayedFired && _autoPlayedThreshold > 0 && dur > 0) {
         if ((cur / dur) * 100 >= _autoPlayedThreshold) {
           _autoPlayedFired = true;
-          _pendingPlayed = _currentEp.id;
+          const autoPlayedId = _currentEp.id;
+          _pendingPlayed = autoPlayedId;
           if (navigator.onLine) _flushPlayed();
+          _afterMarkPlayed(autoPlayedId);
         }
       }
 
