@@ -6,9 +6,12 @@
 const Player = (() => {
   let _currentEp = null;  // { id, title, feedTitle, feedId, duration, resumeAt, imageUrl }
   let _audio = null;
-  let _progressTimer = null;
   let _lastReportedPos = 0;
   let _lastDisplayedPct = -1;
+  let _pendingProgress  = null;   // { id, pos } — latest position not yet confirmed by server
+  let _progressInFlight = false;  // true while an updateProgress request is in-flight
+  let _pendingPlayed    = null;   // episode id whose togglePlayed is queued to send
+  let _stallTimerId     = null;   // setTimeout before showing stall indicator
   let _autoPlayedThreshold = 95;  // % of duration; 0 = disabled
   let _autoPlayedFired = false;   // prevent firing multiple times per episode
   let _sleepTimer = null;
@@ -41,29 +44,32 @@ const Player = (() => {
       const miniFill = _el("player-mini-progress-fill");
       if (miniFill) miniFill.style.width = pct + "%";
 
-      // Full overlay progress + times — skip while user is dragging
+      // Full overlay progress + buffer + thumb — skip while user is dragging
       if (!_dragging) {
         const fullFill = _el("player-full-progress-fill");
         if (fullFill) fullFill.style.width = pct + "%";
         const thumb = _el("player-full-seek-thumb");
         if (thumb) thumb.style.left = pct + "%";
       }
+      _updateBufFills();
       const timeCur = _el("player-time-current");
       const timeTotal = _el("player-time-total");
       if (timeCur) timeCur.textContent = _fmtTime(cur);
       if (timeTotal) timeTotal.textContent = _fmtTime(dur);
 
-      // Report progress to server every 10 seconds
-      if (_currentEp && Math.abs(cur - _lastReportedPos) >= 10) {
+      // Queue a progress report every 15 seconds; one in-flight request at a time
+      if (_currentEp && Math.abs(cur - _lastReportedPos) >= 15) {
         _lastReportedPos = cur;
-        API.updateProgress(_currentEp.id, Math.floor(cur)).catch(() => {});
+        _pendingProgress = { id: _currentEp.id, pos: Math.floor(cur) };
+        if (navigator.onLine) _flushProgress();
       }
 
       // Auto-mark played at threshold
       if (_currentEp && !_autoPlayedFired && _autoPlayedThreshold > 0 && dur > 0) {
         if ((cur / dur) * 100 >= _autoPlayedThreshold) {
           _autoPlayedFired = true;
-          API.togglePlayed(_currentEp.id).catch(() => {});
+          _pendingPlayed = _currentEp.id;
+          if (navigator.onLine) _flushPlayed();
         }
       }
 
@@ -97,7 +103,8 @@ const Player = (() => {
     _audio.addEventListener("ended", () => {
       if (_currentEp && !_autoPlayedFired) {
         _autoPlayedFired = true;
-        API.togglePlayed(_currentEp.id).catch(() => {});
+        _pendingPlayed = _currentEp.id;
+        _flushPlayed();
       }
       _updatePlayIcons(_playIcon());
       _syncPlayBtns();
@@ -114,6 +121,47 @@ const Player = (() => {
     _audio.addEventListener("pause", () => {
       _updatePlayIcons(_playIcon());
       _syncPlayBtns();
+    });
+
+    // ── Stall / network-error recovery ────────────────────────
+    // waiting/stalled: show buffering pulse after a brief delay to avoid
+    // flicker on normal micro-buffers.
+    const _onStall = () => {
+      if (_stallTimerId) return;
+      _stallTimerId = setTimeout(() => _setBuffering(true), 500);
+    };
+    _audio.addEventListener("waiting", _onStall);
+    _audio.addEventListener("stalled", _onStall);
+
+    _audio.addEventListener("playing", () => _setBuffering(false));
+    _audio.addEventListener("canplay",  () => _setBuffering(false));
+
+    // Update buffer fills whenever the browser downloads more data or a seek
+    // completes — timeupdate only fires during active playback, so without
+    // these the fill goes blank after a seek and never recovers.
+    _audio.addEventListener("progress", _updateBufFills);
+    _audio.addEventListener("seeked",   _updateBufFills);
+
+    _audio.addEventListener("error", () => {
+      if (!_currentEp) return;
+      const code = _audio.error?.code;
+      // Only attempt recovery from network errors (code 2); codec / src errors are fatal
+      if (code !== MediaError.MEDIA_ERR_NETWORK) return;
+      _setBuffering(true);
+      const epId = _currentEp.id;
+      const resumePos = isFinite(_audio.currentTime) ? _audio.currentTime : (_currentEp.resumeAt || 0);
+      const _reload = () => {
+        if (_currentEp?.id !== epId) return; // episode changed while we waited
+        _audio.src = API.streamEpisode(epId);
+        _audio.load();
+        _audio.addEventListener("loadedmetadata", () => { _audio.currentTime = resumePos; }, { once: true });
+        _audio.play().catch(() => {});
+      };
+      if (navigator.onLine) {
+        setTimeout(_reload, 3000); // brief back-off before retrying
+      } else {
+        window.addEventListener("online", _reload, { once: true });
+      }
     });
   }
 
@@ -137,6 +185,30 @@ const Player = (() => {
     const full = _el("player-full-play-icon");
     if (mini) mini.innerHTML = svgContent;
     if (full) full.innerHTML = svgContent;
+  }
+
+  function _bufferedPct() {
+    if (!_audio || !isFinite(_audio.duration) || _audio.duration === 0) return 0;
+    const buf = _audio.buffered;
+    const cur = _audio.currentTime;
+    for (let i = 0; i < buf.length; i++) {
+      if (buf.start(i) <= cur && cur <= buf.end(i)) {
+        return Math.min(100, (buf.end(i) / _audio.duration) * 100);
+      }
+    }
+    return 0;
+  }
+
+  function _updateBufFills() {
+    if (!_audio || !isFinite(_audio.duration) || _audio.duration === 0) return;
+    const playedPct = (_audio.currentTime / _audio.duration) * 100;
+    const bufPct    = _bufferedPct();
+    const left  = playedPct.toFixed(2) + "%";
+    const width = Math.max(0, bufPct - playedPct).toFixed(2) + "%";
+    const mini = _el("player-mini-buffer-fill");
+    const full = _el("player-full-buffer-fill");
+    if (mini) { mini.style.left = left; mini.style.width = width; }
+    if (full) { full.style.left = left; full.style.width = width; }
   }
 
   function _fmtTime(s) {
@@ -293,6 +365,45 @@ const Player = (() => {
     el.textContent = remainMin <= 0 ? "Sleep" : `${remainMin}m`;
   }
 
+  // ── Resilient progress / played reporting ──────────────────
+
+  function _setBuffering(on) {
+    clearTimeout(_stallTimerId);
+    _stallTimerId = null;
+    _el("player-bar")?.classList.toggle("player-buffering", on);
+  }
+
+  function _flushProgress() {
+    if (_progressInFlight || !_pendingProgress) return;
+    const { id, pos } = _pendingProgress;
+    _pendingProgress = null;
+    _progressInFlight = true;
+    API.updateProgress(id, pos)
+      .catch(() => {
+        // Re-queue on failure; keep only if no newer position arrived meanwhile
+        if (!_pendingProgress) _pendingProgress = { id, pos };
+      })
+      .finally(() => {
+        _progressInFlight = false;
+        // Drain any position that arrived while this request was in-flight
+        if (_pendingProgress && navigator.onLine) _flushProgress();
+      });
+  }
+
+  function _flushPlayed() {
+    if (!_pendingPlayed) return;
+    const id = _pendingPlayed;
+    _pendingPlayed = null;
+    API.togglePlayed(id).catch(() => {
+      if (!_pendingPlayed) _pendingPlayed = id;
+    });
+  }
+
+  function _flushPending() {
+    if (_pendingProgress) _flushProgress();
+    if (_pendingPlayed)   _flushPlayed();
+  }
+
   // ── Public API ─────────────────────────────────────────────
 
   function togglePause() {
@@ -374,10 +485,16 @@ const Player = (() => {
   function _closePlayer() {
     const stoppedId = _currentEp?.id;
     const stoppedPos = (_audio && isFinite(_audio.currentTime)) ? _audio.currentTime : 0;
+    // Flush the exact stop position to the server before tearing down
+    if (_currentEp && stoppedPos > 0) {
+      _pendingProgress = { id: _currentEp.id, pos: Math.floor(stoppedPos) };
+      _flushProgress();
+    }
     if (_audio) {
       _audio.pause();
       _audio.src = "";
     }
+    _setBuffering(false);
     _clearSleepTimer();
     _sleepMinutes = 0;
     _collapse();
@@ -569,6 +686,9 @@ const Player = (() => {
     window.addEventListener("popstate", () => {
       if (_expanded) _collapse();
     });
+
+    // ── Flush queued progress/played on reconnect ──
+    window.addEventListener("online", _flushPending);
   }
 
   // ── Chevron / transport SVGs ───────────────────────────────
@@ -595,6 +715,26 @@ const Player = (() => {
   // ── Init ───────────────────────────────────────────────────
 
   function init() {
+    const bufStyle = document.createElement("style");
+    bufStyle.textContent = `
+      /* Buffer fill — covers only the ahead-of-playhead buffered region.
+         left/width are set by JS so it never overlaps the played fill.
+         No CSS transition: timeupdate fires fast enough to look smooth. */
+      #player-mini-seek { position: relative; }
+      #player-mini-buffer-fill, #player-full-buffer-fill {
+        position: absolute; top: 0; height: 100%; width: 0%; left: 0%;
+        background: var(--primary); opacity: 0.35;
+        border-radius: 3px; pointer-events: none;
+      }
+      /* Stall pulse on the buffer fill only */
+      @keyframes _player-pulse { 0%,100%{opacity:.35} 50%{opacity:.1} }
+      .player-buffering #player-mini-buffer-fill,
+      .player-buffering #player-full-buffer-fill {
+        animation: _player-pulse 1.4s ease-in-out infinite;
+      }
+    `;
+    document.head.appendChild(bufStyle);
+
     const bar = document.createElement("div");
     bar.id = "player-bar";
     bar.className = "hidden";
@@ -602,6 +742,7 @@ const Player = (() => {
       <!-- Mini bar -->
       <div id="player-mini">
         <div id="player-mini-seek">
+          <div id="player-mini-buffer-fill"></div>
           <div id="player-mini-progress-fill"></div>
         </div>
         <div id="player-mini-inner">
@@ -643,6 +784,7 @@ const Player = (() => {
         <div id="player-full-bottom">
           <div id="player-full-seek-wrap">
             <div id="player-full-seek">
+              <div id="player-full-buffer-fill"></div>
               <div id="player-full-progress-fill"></div>
               <div id="player-full-seek-thumb"></div>
             </div>
