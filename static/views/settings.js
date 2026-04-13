@@ -258,6 +258,14 @@ async function viewSettings() {
               </div>
             </div>
 
+            <div class="form-group">
+              <label class="form-label">Sync Lookback Limit</label>
+              <input class="form-control" name="sync_lookback_limit" type="number"
+                     min="0" value="${settings.sync_lookback_limit ?? 50}" data-numeric="1"
+                     style="max-width:120px" />
+              <div class="form-hint">Maximum number of RSS entries to inspect on each routine sync. Set to 0 for unlimited. Has no effect on the initial sync when a feed is first added, or when importing from XML. Default: 50.</div>
+            </div>
+
             ${toggle("Auto-download new episodes", "auto_download_new",
               settings.auto_download_new,
               "Automatically queue new episodes for download when first detected (does not apply to the initial import when a feed is added.")}
@@ -491,6 +499,7 @@ async function viewSettings() {
       organize_by_year: raw.organize_by_year ?? false,
       save_xml: raw.save_xml ?? false,
       auto_download_new: raw.auto_download_new ?? true,
+      sync_lookback_limit: Number(raw.sync_lookback_limit) ?? 50,
       default_id3_mapping: id3Mapping,
       log_max_entries: Number(raw.log_max_entries) || 500,
       episode_page_size: Number(raw.episode_page_size) || 10000,

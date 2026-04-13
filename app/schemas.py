@@ -37,6 +37,7 @@ class GlobalSettingsBase(BaseModel):
     autoclean_enabled: bool = False
     autoclean_mode: str = "unplayed"
     autoclean_time: str = "02:00"
+    sync_lookback_limit: int = 50
 
 
 class GlobalSettingsUpdate(BaseModel):
@@ -69,6 +70,7 @@ class GlobalSettingsUpdate(BaseModel):
     autoclean_enabled: Optional[bool] = None
     autoclean_mode: Optional[str] = None
     autoclean_time: Optional[str] = None
+    sync_lookback_limit: Optional[int] = None
 
 
 class GlobalSettingsOut(GlobalSettingsBase):

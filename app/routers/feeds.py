@@ -1045,7 +1045,12 @@ def _bg_sync(feed_id: int):
         was_initial = not feed.initial_sync_complete
         log.info("Syncing: %s (id=%d)", feed.title or feed.url, feed_id)
         try:
-            sync_feed_episodes(feed, db)
+            lookback = None
+            if not was_initial:
+                settings = db.query(GlobalSettings).first()
+                limit = settings.sync_lookback_limit if settings else 50
+                lookback = limit if limit and limit > 0 else None
+            sync_feed_episodes(feed, db, lookback_limit=lookback)
             feed.last_error = None
         except Exception as e:
             feed.last_error = str(e)

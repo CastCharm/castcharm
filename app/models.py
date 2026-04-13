@@ -63,6 +63,9 @@ class GlobalSettings(Base):
     autoclean_mode = Column(String, default="unplayed")
     # Scheduled time to run auto-cleanup (HH:MM in user's timezone)
     autoclean_time = Column(String, default="02:00")
+    # Max RSS entries to inspect on non-initial syncs (0 = unlimited); prevents crawling
+    # deep backlogs on every scheduled sync.  Does not apply to initial syncs or XML imports.
+    sync_lookback_limit = Column(Integer, default=50)
 
 
 class AuthSession(Base):
