@@ -329,11 +329,15 @@ def sync_feed_episodes(
     parse_url: Optional[str] = None,
     xml_import: bool = False,
     resolutions: Optional[dict] = None,
+    lookback_limit: Optional[int] = None,
 ) -> tuple[list[int], int]:
     """Fetch feed, upsert episodes into DB.
 
     parse_url: if given, parse this URL/path instead of feed.url (e.g. a local
     complete-feed.xml). Feed metadata fields are not updated when parse_url is used.
+    lookback_limit: when set (and > 0), only the first N entries from the RSS feed
+    are inspected.  This prevents crawling deep backlogs on routine syncs.  Has no
+    effect during initial syncs or XML imports (callers should not pass it then).
     Returns IDs of newly added episodes whose status is 'pending'.
     """
     source = parse_url or feed.url
@@ -426,7 +430,11 @@ def sync_feed_episodes(
     new_pending_episodes: list[Episode] = []
     skipped_count = 0
 
-    for entry in parsed.entries:
+    entries = parsed.entries
+    if lookback_limit and lookback_limit > 0:
+        entries = entries[:lookback_limit]
+
+    for entry in entries:
         guid = getattr(entry, "id", None) or getattr(entry, "guid", None)
         enc_url, enc_type, enc_len = _entry_enclosure(entry)
         pub = _parse_date(getattr(entry, "published_parsed", None))
