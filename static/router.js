@@ -282,6 +282,10 @@ async function updateStatus() {
     // Nav badge for downloads
     _setNavBadge(s.active_downloads + s.download_queue_size);
 
+    // Feeds nav sync pip
+    const _feedsSyncPip = document.getElementById("feeds-nav-sync-pip");
+    if (_feedsSyncPip) _feedsSyncPip.style.display = (s.syncing_count ?? 0) > 0 ? "flex" : "none";
+
     // Keep the Downloads page tab-header badges live regardless of which subtab
     // is active.  _setTabBadge is a no-op when the elements aren't in the DOM.
     if (typeof window._setTabBadge === "function") {
