@@ -150,6 +150,7 @@ async function _pollImportBanner(feedId) {
     if (!s) { banner.style.display = "none"; return; }
     const isRunning = s.status === "running";
     const pct = s.total > 0 ? Math.round((s.processed / s.total) * 100) : 0;
+    const renameN = s.rename_needed || 0;
     banner.style.display = "";
     banner.innerHTML = `
       <div class="import-banner ${isRunning ? "import-banner-running" : s.status === "error" ? "import-banner-error" : "import-banner-done"}">
@@ -160,6 +161,12 @@ async function _pollImportBanner(feedId) {
             ? `${svg('<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>', 'width="14" height="14"')} ${s.message}`
             : `${svg('<polyline points="20 6 9 17 4 12"/>', 'width="14" height="14"')} ${s.message}`}
         </div>
+        ${!isRunning && renameN > 0 ? `
+        <div class="import-banner-rename">
+          ${svg('<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>', 'width="13" height="13"')}
+          <span>${renameN} existing episode${renameN !== 1 ? "s" : ""} need${renameN === 1 ? "s" : ""} renumbering.</span>
+          <button class="btn btn-primary btn-sm" data-action="import-apply-renames">Apply File Updates</button>
+        </div>` : ""}
         ${isRunning ? `<div class="import-banner-bar"><div class="import-banner-fill" style="width:${pct}%"></div></div>` : ""}
         ${!isRunning ? `<button class="import-banner-close" data-action="dismiss-import-banner">×</button>` : ""}
       </div>`;
@@ -1694,6 +1701,7 @@ function episodeRow(ep, feed) {
         ${ep.duration ? `<span><span class="meta-label">Runtime</span> ${ep.duration}</span>` : ""}
         ${ep.file_size ? `<span><span class="meta-label">Size</span> ${fmtBytes(ep.file_size)}</span>` : ""}
         ${statusBadge(ep.status)}
+        ${ep.imported ? `<span class="badge badge-imported" title="Imported from local file">Imported</span>` : ""}
         ${ep.file_missing ? `<span class="badge badge-error" title="File was deleted from disk">File missing</span>` : ""}
         ${!ep.enclosure_url && !isDownloaded ? `<span class="badge badge-default" title="No download URL available for this episode">No URL</span>` : ""}
         ${ep.error_message ? `<span style="color:var(--error)" title="${ep.error_message}">⚠ ${ep.error_message.slice(0,60)}</span>` : ""}
@@ -2330,8 +2338,65 @@ async function _xmlHandleResult(feedId, r) {
   }
 }
 
+// Client-side filename format parser — mirrors backend _compile_filename_format
+// for live preview purposes only.
+function _clientParseFormat(stem, fmt) {
+  if (!fmt || !stem) return null;
+  const tokens = {
+    "%EpisodeNum%": ["(?<epnum>\\d+)",    "epnum"],
+    "%Title%":      ["(?<title>.+?)",     "title"],
+    "%Date%":       ["(?<date>\\d{4}-\\d{2}-\\d{2})", "date"],
+    "%YYYY%":       ["(?<_year>\\d{4})",  "_year"],
+    "%MM%":         ["(?<_month>\\d{2})", "_month"],
+    "%DD%":         ["(?<_day>\\d{2})",   "_day"],
+    "%Season%":     ["(?<season>\\d+)",   "season"],
+    "%Ignore%":     ["(?:.+?)",            null],
+  };
+  const tokenRe = /%(?:EpisodeNum|Title|Date|YYYY|MM|DD|Season|Ignore)%/g;
+  let parts = [], last = 0, hasToken = false;
+  let m;
+  while ((m = tokenRe.exec(fmt)) !== null) {
+    const lit = fmt.slice(last, m.index);
+    if (lit) {
+      let esc = lit.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      esc = esc.replace(/(\\ )+/g, "\\s+").replace(/\\-/g, "[-–—]");
+      parts.push(esc);
+    }
+    parts.push(tokens[m[0]][0]);
+    hasToken = true;
+    last = m.index + m[0].length;
+  }
+  if (!hasToken) return null;
+  const trail = fmt.slice(last);
+  if (trail) {
+    let esc = trail.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    esc = esc.replace(/(\\ )+/g, "\\s+").replace(/\\-/g, "[-–—]");
+    parts.push(esc);
+  }
+  let pat = "^" + parts.join("") + "$";
+  // Make last %Title% greedy
+  const idx = pat.lastIndexOf("(?<title>.+?)");
+  if (idx >= 0) pat = pat.slice(0, idx) + "(?<title>.+)" + pat.slice(idx + 14);
+  try {
+    const re = new RegExp(pat);
+    const rm = re.exec(stem.trim());
+    if (!rm) return null;
+    const result = {};
+    const g = rm.groups || {};
+    if (g.epnum) result["Episode #"] = g.epnum;
+    if (g.title) result["Title"] = g.title.trim();
+    if (g.date) result["Date"] = g.date;
+    if (g._year) {
+      result["Date"] = g._year + (g._month ? "-" + g._month : "") + (g._day ? "-" + g._day : "");
+    }
+    if (g.season) result["Season"] = g.season;
+    return Object.keys(result).length ? result : null;
+  } catch (_) { return null; }
+}
+
 function showImportFilesModal(feedId, feed) {
   const defaultDir = feed?.podcast_folder || "";
+  let _filenameFormat = "";  // user-supplied format, e.g. "%EpisodeNum% - %Title%"
 
   function _srcTag(source) {
     if (!source) return "";
@@ -2347,7 +2412,7 @@ function showImportFilesModal(feedId, feed) {
   }
 
   // ── Step 1: folder picker ──────────────────────────────────────
-  function showStep1(errorMsg) {
+  function showStep1(errorMsg, restoredDir) {
     Modal.open(
       "Import Files",
       `<p style="font-size:13px;color:var(--text-2);margin:0 0 12px;line-height:1.5">
@@ -2356,13 +2421,37 @@ function showImportFilesModal(feedId, feed) {
       <div class="form-group">
         <div style="display:flex;gap:8px">
           <input class="form-control" id="import-dir-input" type="text"
-                 value="${defaultDir}" placeholder="/path/to/audio/files"
+                 value="${escHTML(restoredDir || defaultDir)}" placeholder="/path/to/audio/files"
                  style="font-family:monospace;flex:1" autofocus />
           <button class="btn btn-ghost" type="button" id="btn-dir-go">Go \u2192</button>
         </div>
         <div class="form-hint">Type a path and press <strong>Go \u2192</strong>, or click folders below to navigate.</div>
       </div>
       <div id="import-dir-browser" class="import-dir-browser"></div>
+      <details class="import-fn-format-details" style="margin-top:12px">
+        <summary style="font-size:13px;color:var(--text-2);cursor:pointer;user-select:none">Filename format (optional)</summary>
+        <div style="margin-top:8px">
+          <p style="font-size:12px;color:var(--text-3);margin:0 0 6px;line-height:1.4">
+            Describe how your filenames are structured so we can extract metadata more accurately.
+            Leave blank to use automatic detection.
+          </p>
+          <input class="form-control" id="import-fn-format" type="text"
+                 value="${escHTML(_filenameFormat)}"
+                 placeholder="e.g. %EpisodeNum% - %Title%"
+                 style="font-family:monospace;font-size:13px" />
+          <div class="import-fn-tokens">
+            <span class="import-fn-token" data-token="%EpisodeNum%">%EpisodeNum%</span>
+            <span class="import-fn-token" data-token="%Title%">%Title%</span>
+            <span class="import-fn-token" data-token="%Date%">%Date%</span>
+            <span class="import-fn-token" data-token="%YYYY%">%YYYY%</span>
+            <span class="import-fn-token" data-token="%MM%">%MM%</span>
+            <span class="import-fn-token" data-token="%DD%">%DD%</span>
+            <span class="import-fn-token" data-token="%Season%">%Season%</span>
+            <span class="import-fn-token" data-token="%Ignore%">%Ignore%</span>
+          </div>
+          <div id="import-fn-preview" class="import-fn-preview" style="display:none"></div>
+        </div>
+      </details>
       <div id="import-step1-error" style="color:var(--error);font-size:13px;margin-top:8px;${errorMsg ? "" : "display:none"}">${errorMsg || ""}</div>
       <div class="modal-actions" style="margin-top:12px">
         <button class="btn btn-ghost" data-action="modal-close">Cancel</button>
@@ -2373,6 +2462,51 @@ function showImportFilesModal(feedId, feed) {
         const errEl    = body.querySelector("#import-step1-error");
         const scanBtn  = body.querySelector("#btn-scan-dir");
         const goBtn    = body.querySelector("#btn-dir-go");
+        const fmtInput = body.querySelector("#import-fn-format");
+        const fmtPreview = body.querySelector("#import-fn-preview");
+
+        // Token chip click → insert at cursor
+        body.querySelectorAll(".import-fn-token").forEach(chip => {
+          chip.addEventListener("click", () => {
+            const tok = chip.dataset.token;
+            const start = fmtInput.selectionStart ?? fmtInput.value.length;
+            const end = fmtInput.selectionEnd ?? start;
+            fmtInput.value = fmtInput.value.slice(0, start) + tok + fmtInput.value.slice(end);
+            fmtInput.focus();
+            const pos = start + tok.length;
+            fmtInput.setSelectionRange(pos, pos);
+            fmtInput.dispatchEvent(new Event("input"));
+          });
+        });
+
+        // Live preview: show how the format would parse sample filenames
+        function updateFmtPreview() {
+          const fmt = fmtInput.value.trim();
+          _filenameFormat = fmt;
+          if (!fmt) { fmtPreview.style.display = "none"; return; }
+          // We'll do a quick client-side simulation of the format pattern
+          const samples = window._importSampleFilenames || [];
+          if (!samples.length) { fmtPreview.style.display = "none"; return; }
+          const parsed = samples.map(fn => _clientParseFormat(fn, fmt));
+          const anyMatch = parsed.some(p => p);
+          if (!anyMatch) {
+            fmtPreview.style.display = "";
+            fmtPreview.innerHTML = `<span style="color:var(--warning)">Format didn\u2019t match any sample filenames.</span>`;
+            return;
+          }
+          let html = `<table class="import-fn-preview-table"><tr><th>Filename</th><th>Parsed</th></tr>`;
+          for (let i = 0; i < samples.length; i++) {
+            const p = parsed[i];
+            const parts = p
+              ? Object.entries(p).map(([k, v]) => `<span class="import-fn-field">${escHTML(k)}: ${escHTML(v)}</span>`).join(" ")
+              : `<span style="color:var(--text-3)">no match</span>`;
+            html += `<tr><td style="font-family:monospace;font-size:12px;word-break:break-all">${escHTML(samples[i])}</td><td>${parts}</td></tr>`;
+          }
+          html += `</table>`;
+          fmtPreview.style.display = "";
+          fmtPreview.innerHTML = html;
+        }
+        fmtInput.addEventListener("input", updateFmtPreview);
 
         // Load the directory browser
         if (defaultDir) {
@@ -2394,20 +2528,61 @@ function showImportFilesModal(feedId, feed) {
         async function doScan() {
           const dir = dirInput.value.trim();
           if (!dir) { dirInput.focus(); return; }
-          scanBtn.disabled = true;
-          scanBtn.textContent = "Scanning\u2026";
+          _filenameFormat = fmtInput.value.trim();
           errEl.style.display = "none";
+
+          // Show scanning progress modal while the preview request is in flight
+          Modal.open(
+            "Import Files \u2014 Scanning",
+            `<div style="padding:8px 0 16px">
+              <div style="font-size:12px;color:var(--text-3);font-family:monospace;word-break:break-all;margin-bottom:16px">${escHTML(dir)}</div>
+              <div style="font-size:13px;color:var(--text-2);margin-bottom:10px" id="scan-phase-label">Counting files\u2026</div>
+              <div style="background:var(--border);border-radius:4px;height:6px;overflow:hidden;margin-bottom:8px">
+                <div id="scan-progress-bar" style="height:100%;width:0%;background:var(--primary);border-radius:4px;transition:width 0.2s ease"></div>
+              </div>
+              <div style="font-size:11px;color:var(--text-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:16px" id="scan-file-label"></div>
+            </div>`
+          );
+
+          // Poll for progress while the preview request runs
+          let _scanPollTimer = null;
+          function _updateScanProgress() {
+            const bar   = document.getElementById("scan-progress-bar");
+            const phase = document.getElementById("scan-phase-label");
+            const file  = document.getElementById("scan-file-label");
+            if (!bar) return;
+            API.getImportPreviewStatus(feedId).then(s => {
+              if (!document.getElementById("scan-progress-bar")) return; // modal closed
+              const pct = s.total > 0 ? Math.round((s.current / s.total) * 100) : 0;
+              bar.style.width = pct + "%";
+              if (s.phase === "counting") {
+                phase.textContent = "Counting files\u2026";
+                file.textContent = "";
+              } else if (s.phase === "scanning") {
+                phase.textContent = `Scanning feed for matches: file ${s.current} of ${s.total}\u2026`;
+                file.textContent = s.message || "";
+              }
+            }).catch(() => {});
+          }
+          _scanPollTimer = setInterval(_updateScanProgress, 250);
+
           try {
-            const preview = await API.previewImport(feedId, dir);
+            const preview = await API.previewImport(feedId, dir, _filenameFormat || null);
+            clearInterval(_scanPollTimer);
+            // Stash sample filenames for format preview next time step 1 is shown
+            window._importSampleFilenames = (preview.folder_analysis?.sample_filenames || [])
+              .map(f => f.replace(/\.[^.]+$/, ""));
             showStep2Summary(dir, preview);
           } catch (e) {
-            errEl.textContent = e.message;
-            errEl.style.display = "block";
-            scanBtn.disabled = false;
-            scanBtn.textContent = "Scan This Folder";
+            clearInterval(_scanPollTimer);
+            // Return to step 1 with the error shown and the path restored
+            showStep1(e.message, dir);
           }
         }
         scanBtn.addEventListener("click", doScan);
+
+        // If we already have sample filenames from a previous scan, show preview
+        if (_filenameFormat) updateFmtPreview();
       }
     );
   }
@@ -2453,7 +2628,7 @@ function showImportFilesModal(feedId, feed) {
 
     // If everything is new or nothing to do, skip summary and go straight to review
     if (nMatched === 0 && nNew > 0) {
-      showStep3Review(dir, preview);
+      _maybeShowRenumberWarning(dir, preview, () => showStep1());
       return;
     }
 
@@ -2517,15 +2692,15 @@ function showImportFilesModal(feedId, feed) {
       ${confText}
       <div class="modal-actions" style="margin-top:16px">
         <button class="btn btn-ghost" id="btn-import-back">\u2190 Back</button>
-        <button class="btn btn-ghost" id="btn-review-details">Review Details</button>
+        ${allHighConf ? `<button class="btn btn-ghost" id="btn-review-details">Review Details</button>` : ""}
         ${allHighConf ? `<button class="btn btn-primary" id="btn-import-all">Import All \u2192</button>` : `<button class="btn btn-primary" id="btn-review-details-primary">Review & Import</button>`}
       </div>`,
       (body) => {
         body.querySelector("#btn-import-back").addEventListener("click", () => showStep1());
-        body.querySelector("#btn-review-details")?.addEventListener("click", () => showStep3Review(dir, preview));
+        body.querySelector("#btn-review-details")?.addEventListener("click", () => _maybeShowRenumberWarning(dir, preview, () => showStep2Summary(dir, preview)));
 
         const primaryReview = body.querySelector("#btn-review-details-primary");
-        if (primaryReview) primaryReview.addEventListener("click", () => showStep3Review(dir, preview));
+        if (primaryReview) primaryReview.addEventListener("click", () => _maybeShowRenumberWarning(dir, preview, () => showStep2Summary(dir, preview)));
 
         const importAllBtn = body.querySelector("#btn-import-all");
         if (importAllBtn) {
@@ -2537,8 +2712,11 @@ function showImportFilesModal(feedId, feed) {
                 path: f.path,
                 skip: false,
                 episode_id: f.match?.episode_id || null,
+                episode_number: f.episode_number ?? null,
+                title: f.title ?? null,
+                date: f.date ?? null,
               }));
-              await API.commitImport(feedId, items);
+              await API.commitImport(feedId, items, _filenameFormat || null);
               Modal.close();
               Toast.success("Import started \u2014 check the banner above the episode list for progress.");
               _pollImportBanner(feedId);
@@ -2551,6 +2729,41 @@ function showImportFilesModal(feedId, feed) {
         }
       }
     );
+  }
+
+  // ── Renumber warning interstitial ─────────────────────────────
+  // onBack: function to call when the user clicks "← Back"
+  function showStepRenumberWarning(dir, preview, onBack) {
+    Modal.open(
+      "Import Files \u2014 Heads Up",
+      `<div class="import-renumber-note">
+        ${svg('<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>', 'width="14" height="14"')}
+        <div>
+          <strong>Episode renumbering may occur.</strong>
+          Some of the files you're importing appear to be older than episodes already in this feed.
+          Importing them may cause existing episodes to be renumbered to make room.
+          Any affected files will be flagged for renaming after import — you'll be prompted to apply those updates.
+          See the activity log for details after import.
+        </div>
+      </div>
+      <div class="modal-actions" style="margin-top:16px">
+        <button class="btn btn-ghost" id="btn-renumber-back">\u2190 Back</button>
+        <button class="btn btn-primary" id="btn-renumber-continue">Continue \u2192</button>
+      </div>`,
+      (body) => {
+        body.querySelector("#btn-renumber-back").addEventListener("click", onBack);
+        body.querySelector("#btn-renumber-continue").addEventListener("click", () => showStep3Review(dir, preview));
+      }
+    );
+  }
+
+  // Route to interstitial if needed, otherwise straight to Step 3
+  function _maybeShowRenumberWarning(dir, preview, onBack) {
+    if (preview.may_renumber && preview.has_existing_episodes) {
+      showStepRenumberWarning(dir, preview, onBack);
+    } else {
+      showStep3Review(dir, preview);
+    }
   }
 
   // ── Step 3: review table ───────────────────────────────────────
@@ -2777,13 +2990,17 @@ function showImportFilesModal(feedId, feed) {
 
         commitBtn.addEventListener("click", async () => {
           const items = [];
-          body.querySelectorAll("#import-tbody tr").forEach(row => {
+          body.querySelectorAll("#import-tbody tr").forEach((row, i) => {
             if (row.querySelector(".import-skip-chk")?.checked) return;
             const epIdVal = row.querySelector(".import-ep-select")?.value || "";
+            const f = sortedFiles[i];
             items.push({
-              path:       row.dataset.path,
-              skip:       false,
-              episode_id: epIdVal ? parseInt(epIdVal, 10) : null,
+              path:           row.dataset.path,
+              skip:           false,
+              episode_id:     epIdVal ? parseInt(epIdVal, 10) : null,
+              episode_number: f?.episode_number ?? null,
+              title:          f?.title ?? null,
+              date:           f?.date ?? null,
             });
           });
 
@@ -2791,7 +3008,7 @@ function showImportFilesModal(feedId, feed) {
           commitBtn.textContent = "Importing\u2026";
           errEl.style.display = "none";
           try {
-            await API.commitImport(feedId, items);
+            await API.commitImport(feedId, items, _filenameFormat || null);
             Modal.close();
             Toast.success("Import started \u2014 check the banner above the episode list for progress.");
             _pollImportBanner(feedId);

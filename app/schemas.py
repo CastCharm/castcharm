@@ -214,6 +214,7 @@ class EpisodeOut(BaseModel):
     filename_outdated: bool = False
     custom_id3_tags: Optional[dict] = None
     id3_tags_outdated: bool = False
+    imported: bool = False
     custom_image_url: Optional[str] = None
     file_missing: bool = False
     played: bool = False
@@ -289,6 +290,7 @@ class ImportFilesRequest(BaseModel):
 
 class ImportPreviewRequest(BaseModel):
     directory: str
+    filename_format: Optional[str] = None
 
 
 class ImportStageItem(BaseModel):
@@ -303,3 +305,4 @@ class ImportStageItem(BaseModel):
 
 class ImportStageRequest(BaseModel):
     items: list[ImportStageItem]
+    filename_format: Optional[str] = None
