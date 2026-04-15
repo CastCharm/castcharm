@@ -401,9 +401,29 @@ def delete_feed(feed_id: int, delete_files: bool = False, force: bool = False, d
                     except OSError:
                         pass
 
+        # Remove app-generated non-audio files that the episode loop doesn't cover
+        if podcast_folder and os.path.isdir(podcast_folder):
+            for fname in ("cover.jpg", "complete-feed.xml", "castcharm.json"):
+                p = os.path.join(podcast_folder, fname)
+                if os.path.exists(p):
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
+
         # Remove the entire podcast folder (user explicitly chose "delete all files")
         if podcast_folder and os.path.isdir(podcast_folder):
-            shutil.rmtree(podcast_folder, ignore_errors=True)
+            try:
+                shutil.rmtree(podcast_folder)
+            except OSError as exc:
+                log.warning("Could not fully remove podcast folder %s: %s", podcast_folder, exc)
+                # Best-effort: prune any directories that are now empty (e.g. year subdirs)
+                for dirpath, _dirs, _files in os.walk(podcast_folder, topdown=False):
+                    try:
+                        if not os.listdir(dirpath):
+                            os.rmdir(dirpath)
+                    except OSError:
+                        pass
 
     if force:
         try:
