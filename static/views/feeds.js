@@ -82,6 +82,25 @@ function _flipReorderGrid(sortedFeeds) {
   }, 350);
 }
 
+function _applyDeletingOverlays() {
+  const ids = window._deletingFeedIds;
+  if (!ids?.size) return;
+  for (const id of ids) {
+    const card = document.querySelector(`.feed-card[data-id="${id}"]`);
+    if (!card || card.querySelector(".feed-card-deleting")) continue;
+    card.style.pointerEvents = "none";
+    card.insertAdjacentHTML("beforeend", `
+      <div class="feed-card-deleting" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.55);border-radius:inherit;z-index:10">
+        <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" width="36" height="36" style="opacity:0.85">
+          <polyline points="3 6 5 6 21 6"/>
+          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+          <path d="M10 11v6"/><path d="M14 11v6"/>
+          <path d="M9 6V4h6v2"/>
+        </svg>
+      </div>`);
+  }
+}
+
 async function _refreshFeedsGrid() {
   const feeds = await API.getFeeds();
   _feedsData = feeds;
@@ -94,6 +113,7 @@ async function _refreshFeedsGrid() {
     return;
   }
   grid.innerHTML = _sortFeeds(feeds).map(feedCard).join("");
+  _applyDeletingOverlays();
   const sub = document.querySelector(".page-subtitle");
   if (sub) sub.textContent = `${feeds.length} podcast${feeds.length !== 1 ? "s" : ""}`;
 }
@@ -237,6 +257,7 @@ async function viewFeeds() {
           </div>`}
     </div>`;
 
+  _applyDeletingOverlays();
   document.getElementById("btn-add-feed")?.addEventListener("click", showAddFeedModal);
   document.getElementById("btn-add-feed-empty")?.addEventListener("click", showAddFeedModal);
 

@@ -3081,28 +3081,19 @@ function showDeleteFeedModal(feed) {
     (body) => {
       body.querySelector("#btn-confirm-delete").addEventListener("click", async () => {
         const deleteFiles = body.querySelector("#chk-delete-files").checked;
+        Modal.close();
+        window._deletingFeedIds = window._deletingFeedIds || new Set();
+        window._deletingFeedIds.add(feed.id);
+        Router.navigate("/feeds");
         try {
-          await API.request("DELETE", `/api/feeds/${feed.id}?delete_files=${deleteFiles}`);
-          Modal.close();
+          await API.deleteFeed(feed.id, deleteFiles);
           Toast.success(deleteFiles ? "Feed and files deleted" : "Feed deleted");
-          Router.navigate("/feeds");
+          window._deletingFeedIds.delete(feed.id);
+          if (typeof _refreshFeedsGrid === "function") await _refreshFeedsGrid();
         } catch (e) {
-          const errDiv = body.querySelector("#delete-error");
-          errDiv.innerHTML = `
-            <div style="color:var(--error);margin-bottom:10px;font-size:13px">⚠ ${e.message}</div>
-            <p style="color:var(--text-2);font-size:13px;margin-bottom:12px">
-              Force delete will remove the feed directly from the database,
-              bypassing normal checks. This cannot be undone.
-            </p>
-            <button class="btn btn-danger btn-sm" id="btn-force-delete">Force Delete</button>`;
-          body.querySelector("#btn-force-delete").addEventListener("click", async () => {
-            try {
-              await API.request("DELETE", `/api/feeds/${feed.id}?delete_files=${deleteFiles}&force=true`);
-              Modal.close();
-              Toast.success("Feed force-deleted");
-              Router.navigate("/feeds");
-            } catch (e2) { Toast.error(`Force delete failed: ${e2.message}`); }
-          });
+          window._deletingFeedIds.delete(feed.id);
+          Toast.error(`Delete failed: ${e.message}`);
+          if (typeof _refreshFeedsGrid === "function") await _refreshFeedsGrid();
         }
       });
     }
