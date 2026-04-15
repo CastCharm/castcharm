@@ -242,11 +242,11 @@ function renderAvailableFeeds(feeds) {
     <div class="episode-item">
       <div class="episode-art" style="cursor:pointer" data-action="navigate" data-path="/feeds/${f.id}">
         ${f.image_url
-          ? `<img src="${f.image_url}" alt="" loading="lazy" /><div class="episode-art-placeholder" style="display:none">${_PODCAST_SVG}</div>`
+          ? `<img src="${_safeImgUrl(f.image_url)}" alt="" loading="lazy" /><div class="episode-art-placeholder" style="display:none">${_PODCAST_SVG}</div>`
           : `<div class="episode-art-placeholder">${_PODCAST_SVG}</div>`}
       </div>
       <div class="episode-info" style="cursor:pointer" data-action="navigate" data-path="/feeds/${f.id}">
-        <div class="episode-title">${f.title || f.url}</div>
+        <div class="episode-title">${escHTML(f.title || f.url)}</div>
         <div class="episode-meta">
           ${f.downloaded_count > 0 ? `<span>${f.downloaded_count} downloaded</span>` : ""}
           <span>${f.available_count} not downloaded</span>
@@ -833,9 +833,9 @@ function renderDLRow(ep) {
         : `<div class="episode-art-placeholder">${_PODCAST_SVG}</div>`}
     </div>
     <div class="episode-info">
-      <div class="episode-title">${ep.title || "Untitled"}</div>
+      <div class="episode-title">${escHTML(ep.title || "Untitled")}</div>
       <div class="episode-meta">
-        ${ep.feed_title ? `<span style="color:var(--primary)">${ep.feed_title}</span>` : ""}
+        ${ep.feed_title ? `<span style="color:var(--primary)">${escHTML(ep.feed_title)}</span>` : ""}
         <span>${fmt(ep.published_at, ep.date_is_approximate)}</span>
         ${ep.file_size ? `<span>${fmtBytes(ep.file_size)}</span>` : ""}
         ${statusBadge(ep.status)}

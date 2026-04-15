@@ -67,9 +67,9 @@ window._refreshSuggestions = async function(btn) {
           ${_thumb(ep.custom_image_url || ep.episode_image_url || ep.feed_image_url)}
         </div>
         <div class="activity-info" style="flex:1;min-width:0">
-          <div class="activity-title truncate">${ep.title || "Untitled"}</div>
+          <div class="activity-title truncate">${escHTML(ep.title || "Untitled")}</div>
           <div class="activity-sub">
-            <span class="feed-link" data-action="navigate" data-path="/feeds/${ep.feed_id}">${ep.feed_title || ""}</span>
+            <span class="feed-link" data-action="navigate" data-path="/feeds/${ep.feed_id}">${escHTML(ep.feed_title || "")}</span>
           </div>
         </div>
         ${epPlayBtn(ep)}
@@ -162,7 +162,7 @@ async function viewDashboard() {
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:22px;height:22px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
                   </div>
                   <div class="activity-info">
-                    <div class="activity-title truncate" style="color:var(--text)">${f.title || f.url}</div>
+                    <div class="activity-title truncate" style="color:var(--text)">${escHTML(f.title || f.url)}</div>
                     <div class="activity-sub truncate" style="color:var(--error);max-width:100%">${escHTML((f.last_error || "").slice(0, 120))}</div>
                   </div>
                 </div>`).join("");
@@ -185,9 +185,9 @@ async function viewDashboard() {
               </div>
               <div class="activity-info" style="flex:1;min-width:0">
                 <div class="activity-title truncate" style="cursor:pointer"
-                     data-action="navigate" data-path="/feeds/${ep.feed_id}" data-ep-scroll="${ep.id}">${ep.title || "Untitled"}</div>
+                     data-action="navigate" data-path="/feeds/${ep.feed_id}" data-ep-scroll="${ep.id}">${escHTML(ep.title || "Untitled")}</div>
                 <div class="activity-sub">
-                  <span class="feed-link" data-action="navigate" data-path="/feeds/${ep.feed_id}">${ep.feed_title || ""}</span>${minsIn ? ` · ${minsIn}` : ""}
+                  <span class="feed-link" data-action="navigate" data-path="/feeds/${ep.feed_id}">${escHTML(ep.feed_title || "")}</span>${minsIn ? ` · ${minsIn}` : ""}
                 </div>
               </div>
               ${epPlayBtn(ep)}
@@ -214,9 +214,9 @@ async function viewDashboard() {
                   ${_thumb(ep.custom_image_url || ep.episode_image_url || ep.feed_image_url)}
                 </div>
                 <div class="activity-info">
-                  <div class="activity-title truncate">${ep.title || "Untitled"}</div>
+                  <div class="activity-title truncate">${escHTML(ep.title || "Untitled")}</div>
                   <div class="activity-sub">
-                    <span class="feed-link" data-action="navigate" data-path="/feeds/${ep.feed_id}">${ep.feed_title || ""}</span> · ${timeAgo(ep.published_at)}${ep.file_size ? ` · ${fmtBytes(ep.file_size)}` : ""}
+                    <span class="feed-link" data-action="navigate" data-path="/feeds/${ep.feed_id}">${escHTML(ep.feed_title || "")}</span> · ${timeAgo(ep.published_at)}${ep.file_size ? ` · ${fmtBytes(ep.file_size)}` : ""}
                   </div>
                 </div>
                 ${epPlayBtn(ep)}
@@ -240,9 +240,9 @@ async function viewDashboard() {
               ${_thumb(ep.custom_image_url || ep.episode_image_url || ep.feed_image_url)}
             </div>
             <div class="activity-info" style="flex:1;min-width:0">
-              <div class="activity-title truncate">${ep.title || "Untitled"}</div>
+              <div class="activity-title truncate">${escHTML(ep.title || "Untitled")}</div>
               <div class="activity-sub">
-                <span class="feed-link" data-action="navigate" data-path="/feeds/${ep.feed_id}">${ep.feed_title || ""}</span>
+                <span class="feed-link" data-action="navigate" data-path="/feeds/${ep.feed_id}">${escHTML(ep.feed_title || "")}</span>
               </div>
             </div>
             ${epPlayBtn(ep)}
@@ -288,7 +288,7 @@ async function viewDashboard() {
                     ${_thumb(f.custom_image_url || f.image_url)}
                   </div>
                   <div class="activity-info">
-                    <div class="activity-title truncate" style="color:var(--text)">${f.title || f.url}</div>
+                    <div class="activity-title truncate" style="color:var(--text)">${escHTML(f.title || f.url)}</div>
                     <div class="activity-sub">${f.unplayed_count} of ${f.downloaded_count} unplayed</div>
                   </div>
                   <div style="display:flex;flex-direction:column;align-items:center;flex-shrink:0;gap:2px">

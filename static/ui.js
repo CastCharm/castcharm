@@ -429,7 +429,16 @@ function svg(path, extra = "") {
 
 const _PODCAST_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="40%" height="40%" opacity="0.5"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg>`;
 
+// Only allow http/https/relative/data:image URLs in src attributes — everything else becomes ""
+function _safeImgUrl(url) {
+  if (!url) return "";
+  const s = url.trim();
+  if (s.startsWith("http://") || s.startsWith("https://") || s.startsWith("/") || s.startsWith("data:image/")) return s;
+  return "";
+}
+
 function artImg(url, fallbackEmoji = "", size = "", paused = false) {
+  url = _safeImgUrl(url);
   const placeholder = fallbackEmoji
     ? `<div class="feed-card-art-placeholder">${fallbackEmoji}</div>`
     : `<div class="feed-card-art-placeholder">${_PODCAST_SVG}</div>`;

@@ -389,8 +389,8 @@ async function viewFeedDetail(feedId) {
       <div class="feed-header">
         <div class="feed-header-art">${artImg(feed.custom_image_url || feed.image_url, "", "", !feed.active)}</div>
         <div class="feed-header-info">
-          <div class="feed-header-title">${feed.title || feed.url}</div>
-          <div class="feed-header-author">${feed.author || ""}</div>
+          <div class="feed-header-title">${escHTML(feed.title || feed.url)}</div>
+          <div class="feed-header-author">${escHTML(feed.author || "")}</div>
           <div class="feed-last-checked">
             ${feed.last_checked
               ? `Last checked ${fmtDateTime(feed.last_checked)}`
@@ -415,7 +415,7 @@ async function viewFeedDetail(feedId) {
                       style="flex-shrink:0;font-size:12px;padding:2px 8px">Dismiss</button>
             </div>` : ""}
           </div>
-          ${feed.description ? `<div class="feed-header-desc">${feed.description}</div>` : ""}
+          ${feed.description ? `<div class="feed-header-desc">${_sanitizeNotes(feed.description)}</div>` : ""}
           <div class="feed-header-actions">
             <button class="btn btn-primary btn-sm" id="btn-sync-feed">
               ${svg('<polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>')}
@@ -1012,6 +1012,19 @@ async function viewFeedDetail(feedId) {
     window.location.href = `/api/feeds/${id}/clean-rss`;
   });
 
+  // Expand/collapse description if it overflows the 3-line clamp
+  const descEl = document.querySelector(".feed-header-desc");
+  if (descEl && descEl.scrollHeight > descEl.clientHeight) {
+    descEl.dataset.expandable = "";
+    descEl.addEventListener("click", () => {
+      if ("expanded" in descEl.dataset) {
+        delete descEl.dataset.expanded;
+      } else {
+        descEl.dataset.expanded = "";
+      }
+    });
+  }
+
   document.getElementById("btn-renumber-all")?.addEventListener("click", () => {
     showRenumberModal(id);
   });
@@ -1489,15 +1502,53 @@ async function loadMoreEpisodes() {
 
 function _sanitizeNotes(html) {
   const doc = new DOMParser().parseFromString(html || "", "text/html");
-  doc.querySelectorAll("script,style,iframe,object,embed,form").forEach((el) => el.remove());
-  doc.querySelectorAll("*").forEach((el) => {
-    [...el.attributes].forEach((a) => {
-      if (a.name.startsWith("on")) el.removeAttribute(a.name);
-      if (a.name === "href" && a.value.toLowerCase().trimStart().startsWith("javascript:")) el.removeAttribute(a.name);
-    });
-    if (el.tagName === "A") { el.setAttribute("target", "_blank"); el.setAttribute("rel", "noopener noreferrer"); }
-  });
-  return doc.body.innerHTML;
+
+  // Allowlisted inline tags — kept as-is (attributes stripped below)
+  const KEEP = new Set(["A", "B", "STRONG", "I", "EM", "U", "BR", "P"]);
+  // Removed entirely, including all their content
+  const REMOVE = new Set(["SCRIPT", "STYLE", "IFRAME", "OBJECT", "EMBED", "FORM",
+                           "IMG", "HR", "INPUT", "BUTTON", "SELECT", "TEXTAREA", "SVG"]);
+  // Unwrapped to plain text; a <br> is appended if the node had visible content
+  // so paragraph/list/table structure still reads as separate lines
+  const BLOCK = new Set(["DIV", "SECTION", "ARTICLE", "ASIDE", "HEADER", "FOOTER",
+                          "UL", "OL", "LI", "DL", "DD", "DT",
+                          "TABLE", "THEAD", "TBODY", "TFOOT", "TR", "TD", "TH",
+                          "BLOCKQUOTE", "PRE", "FIGURE", "FIGCAPTION",
+                          "H1", "H2", "H3", "H4", "H5", "H6"]);
+
+  function clean(node) {
+    if (node.nodeType === Node.TEXT_NODE) return;
+    // Process children first so replacements happen bottom-up
+    [...node.childNodes].forEach(clean);
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const tag = node.tagName;
+
+    if (REMOVE.has(tag)) { node.remove(); return; }
+
+    if (KEEP.has(tag)) {
+      // Save href before stripping attributes
+      const href = tag === "A" ? (node.getAttribute("href") || "").trim() : "";
+      [...node.attributes].forEach(a => node.removeAttribute(a.name));
+      const safe = href && (href.startsWith("http://") || href.startsWith("https://") || href.startsWith("mailto:"));
+      if (tag === "A" && safe) {
+        node.setAttribute("href", href);
+        node.setAttribute("target", "_blank");
+        node.setAttribute("rel", "noopener noreferrer");
+      }
+      return;
+    }
+
+    // Unwrap: move children out, add a trailing <br> for block elements that had text
+    const frag = doc.createDocumentFragment();
+    [...node.childNodes].forEach(c => frag.appendChild(c));
+    if (BLOCK.has(tag) && node.textContent.trim()) frag.appendChild(doc.createElement("br"));
+    node.replaceWith(frag);
+  }
+
+  [...doc.body.childNodes].forEach(clean);
+  // Collapse runs of 3+ consecutive <br> tags down to two (blank line at most)
+  doc.body.innerHTML = doc.body.innerHTML.replace(/(<br\s*\/?>\s*){3,}/gi, "<br><br>");
+  return doc.body.innerHTML.trim();
 }
 
 window._feedUpdateAutocleanMode = function() {
@@ -1599,7 +1650,7 @@ function episodeRow(ep, feed) {
           : `<div class="episode-art-placeholder">${_PODCAST_SVG}</div>`}
       </div>
       <div class="episode-info">
-        <div class="episode-title" style="text-decoration:line-through">${ep.title || "Untitled"}</div>
+        <div class="episode-title" style="text-decoration:line-through">${escHTML(ep.title || "Untitled")}</div>
         <div class="episode-meta">
           <span>${fmt(ep.published_at, ep.date_is_approximate)}</span>
           ${ep.duration ? `<span><span class="meta-label">Runtime</span> ${ep.duration}</span>` : ""}
@@ -1693,7 +1744,7 @@ function episodeRow(ep, feed) {
     ${artArea}
     <div class="episode-info">
       <div class="episode-title">
-        ${ep.played ? '<span class="ep-played-dot" title="Played"></span>' : ""}${ep.title || "Untitled"}
+        ${ep.played ? '<span class="ep-played-dot" title="Played"></span>' : ""}${escHTML(ep.title || "Untitled")}
       </div>
       <div class="episode-meta">
         ${seqBadge}

@@ -844,7 +844,7 @@ function _feedRow(f) {
       <td>
         <div style="display:flex;align-items:center;gap:8px">
           ${_art(f.image_url)}
-          <a href="#/feeds/${f.feed_id}" style="color:var(--text);font-weight:500;font-size:13px">${f.title}</a>
+          <a href="#/feeds/${f.feed_id}" style="color:var(--text);font-weight:500;font-size:13px">${escHTML(f.title)}</a>
         </div>
       </td>
       <td style="text-align:right;color:var(--text-2);font-size:13px">

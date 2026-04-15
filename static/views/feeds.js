@@ -416,12 +416,12 @@ async function viewFeeds() {
 function feedCard(f) {
   return `<div class="feed-card"
                data-id="${f.id}"
-               data-title="${(f.title || "").toLowerCase()}"
-               data-author="${(f.author || "").toLowerCase()}"
+               data-title="${escHTML((f.title || "").toLowerCase())}"
+               data-author="${escHTML((f.author || "").toLowerCase())}"
                data-action="navigate" data-path="/feeds/${f.id}">
     <div class="feed-card-art">${artImg(f.custom_image_url || f.image_url, "", "", !f.active)}</div>
-    <div class="feed-card-title">${f.title || f.url}</div>
-    <div class="feed-card-author">${f.author || "Unknown author"}</div>
+    <div class="feed-card-title">${escHTML(f.title || f.url)}</div>
+    <div class="feed-card-author">${escHTML(f.author || "Unknown author")}</div>
     <div class="feed-card-meta">${_feedCardMeta(f)}</div>
     <div class="feed-card-overlay">
       <button class="feed-card-action" data-action="sync" data-id="${f.id}" title="Sync this feed">
@@ -430,7 +430,7 @@ function feedCard(f) {
           <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
         </svg>
       </button>
-      <button class="feed-card-action feed-card-action-delete" data-action="delete" data-id="${f.id}" data-title="${(f.title || f.url).replace(/"/g, '&quot;')}" title="Delete this feed">
+      <button class="feed-card-action feed-card-action-delete" data-action="delete" data-id="${f.id}" data-title="${escHTML(f.title || f.url)}" title="Delete this feed">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
           <polyline points="3 6 5 6 21 6"/>
           <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
