@@ -192,6 +192,7 @@ class Episode(Base):
     filename_outdated = Column(Boolean, default=False)  # seq_number changed; file needs renaming
     custom_id3_tags = Column(JSON, nullable=True)   # per-episode tag overrides {TAG: value}
     id3_tags_outdated = Column(Boolean, default=False)  # custom tags set but not yet written to file
+    imported = Column(Boolean, default=False)  # True when episode file was imported (not downloaded from RSS)
 
     # Playback tracking
     played = Column(Boolean, default=False, index=True)

@@ -132,6 +132,28 @@ document.addEventListener("click", (e) => {
     return;
   }
 
+  // ── Apply file renames after import ──────────────────────
+  if (action === "import-apply-renames") {
+    const feedId = window._epState?.id;
+    if (!feedId) return;
+    el.disabled = true;
+    el.textContent = "Applying…";
+    API.applyFileUpdates(feedId).then((r) => {
+      const parts = [];
+      if (r.renamed > 0) parts.push(`${r.renamed} file${r.renamed !== 1 ? "s" : ""} renamed`);
+      if (r.tagged > 0) parts.push(`${r.tagged} file${r.tagged !== 1 ? "s" : ""} tagged`);
+      const msg = parts.length ? parts.join(", ") : "No changes needed";
+      Toast.success(msg + (r.errors.length ? ` (${r.errors.length} error${r.errors.length !== 1 ? "s" : ""})` : ""));
+      el.closest(".import-banner-rename")?.remove();
+      if (typeof _refreshEpisodeList === "function") _refreshEpisodeList();
+    }).catch((e) => {
+      el.disabled = false;
+      el.textContent = "Apply File Updates";
+      Toast.error(e.message);
+    });
+    return;
+  }
+
   // ── ep-more-wrap close-only (used on download <a> links) ─
   if (action === "ep-more-close") {
     el.closest(".ep-more-wrap")?.removeAttribute("data-open");

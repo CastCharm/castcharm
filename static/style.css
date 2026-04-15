@@ -570,6 +570,7 @@ img { display: block; }
 .badge-warning { background: var(--warning-light); color: var(--warning); }
 .badge-primary { background: var(--primary-light); color: var(--primary); }
 .badge-info { background: var(--info-light); color: var(--primary); }
+.badge-imported { background: var(--bg-3); color: var(--text-3); }
 
 /* =========================================================
    Feed detail
@@ -2206,6 +2207,17 @@ body.player-expanded { overflow: hidden; }
   padding: 0 2px;
 }
 .import-banner-close:hover { color: var(--text-1); }
+.import-banner-rename {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid color-mix(in srgb, var(--text-3) 20%, transparent);
+  font-size: 13px;
+  color: var(--text-2);
+}
+.import-banner-rename .btn { flex-shrink: 0; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .spin { animation: spin 1s linear infinite; display: inline-block; }
 
@@ -2446,6 +2458,71 @@ body.player-expanded { overflow: hidden; }
 .import-source-tag.src-id3 { background: rgba(var(--primary-rgb,80,130,220),0.15); color: var(--primary); }
 .import-source-tag.src-filename { background: rgba(128,128,128,0.15); color: var(--text-3); }
 .import-source-tag.src-folder { background: rgba(160,100,220,0.15); color: rgb(160,100,220); }
+
+/* Filename format tokens & preview */
+.import-fn-tokens {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.import-fn-token {
+  display: inline-block;
+  font-family: monospace;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--bg-3);
+  color: var(--text-2);
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s;
+}
+.import-fn-token:hover { background: var(--primary); color: var(--bg-1); }
+.import-fn-preview {
+  margin-top: 8px;
+  font-size: 12px;
+  max-height: 150px;
+  overflow-y: auto;
+}
+.import-fn-preview-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.import-fn-preview-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-3);
+  padding: 3px 6px;
+  border-bottom: 1px solid var(--border);
+}
+.import-fn-preview-table td {
+  padding: 3px 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+  vertical-align: top;
+}
+.import-renumber-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: rgba(var(--warning-rgb,200,150,50),0.10);
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.import-renumber-note svg { flex-shrink: 0; color: var(--warning); margin-top: 1px; }
+.import-fn-field {
+  display: inline-block;
+  font-size: 11px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(var(--primary-rgb,80,130,220),0.12);
+  color: var(--primary);
+  margin: 1px 2px;
+}
 
 /* ── Timezone combobox ───────────────────────────────────────────────────── */
 .tz-combo { position: relative; }

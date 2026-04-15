@@ -96,6 +96,7 @@ def _migrate_db():
         ("feeds",           "autoclean_mode",                "VARCHAR"),
         ("feeds",           "autoclean_exclude",             "BOOLEAN DEFAULT 0"),
         ("global_settings", "sync_lookback_limit",           "INTEGER DEFAULT 50"),
+        ("episodes",        "imported",                      "BOOLEAN DEFAULT 0"),
     ]
     with engine.connect() as conn:
         for table, column, col_def in migrations:

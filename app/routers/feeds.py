@@ -871,6 +871,15 @@ def import_status(feed_id: int, db: Session = Depends(get_db)):
     return status
 
 
+@router.get("/{feed_id}/import-preview-status")
+def import_preview_status(feed_id: int):
+    from app.importer import get_preview_status
+    status = get_preview_status(feed_id)
+    if status is None:
+        return {"phase": "idle", "current": 0, "total": 0, "message": ""}
+    return status
+
+
 @router.post("/{feed_id}/import-preview")
 def import_preview(feed_id: int, body: ImportPreviewRequest, db: Session = Depends(get_db)):
     """Scan a directory and return per-file match results without writing anything to DB."""
@@ -884,7 +893,8 @@ def import_preview(feed_id: int, body: ImportPreviewRequest, db: Session = Depen
     if not os.path.isdir(directory):
         raise HTTPException(status_code=400, detail="Directory not found on server")
 
-    return preview_import_directory(feed_id, directory, db)
+    return preview_import_directory(feed_id, directory, db,
+                                    filename_format=body.filename_format)
 
 
 @router.post("/{feed_id}/import-stage")
@@ -912,6 +922,7 @@ def import_stage(
         "matched": 0, "created": 0, "renamed": 0, "errors": 0, "message": "Starting…",
     }
 
+    fn_fmt = body.filename_format
     log.info("Staged import started for: %s (id=%d) — %d file(s)", feed.title or feed.url, feed_id, to_process_count)
 
     from app.database import SessionLocal
@@ -920,7 +931,7 @@ def import_stage(
         bg_db = SessionLocal()
         try:
             from app.importer import import_staged
-            import_staged(feed_id, items, bg_db)
+            import_staged(feed_id, items, bg_db, filename_format=fn_fmt)
         finally:
             bg_db.close()
 
