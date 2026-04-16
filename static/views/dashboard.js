@@ -94,6 +94,75 @@ window._refreshSuggestions = async function(btn) {
 };
 
 // ============================================================
+// Live Continue Listening upsert (called from Player hooks)
+// ============================================================
+function _upsertCLItem(playerEp, posSeconds) {
+  // Only operates when the dashboard is currently rendered
+  const anchor = document.getElementById("newest-episodes-card");
+  if (!anchor) return;
+
+  const minsIn = posSeconds > 59 ? Math.floor(posSeconds / 60) + "m in" : "";
+  const existing = document.getElementById(`cl-ep-${playerEp.id}`);
+
+  if (existing) {
+    const sub = existing.querySelector(".activity-sub");
+    if (sub) {
+      const feedLink = sub.querySelector(".feed-link");
+      const feedLinkHTML = feedLink ? feedLink.outerHTML : escHTML(playerEp.feedTitle || "");
+      sub.innerHTML = feedLinkHTML + (minsIn ? ` · ${minsIn}` : "");
+    }
+    return;
+  }
+
+  const isCurrentlyPlaying = Player.currentId() === playerEp.id && Player.isPlaying();
+  const hasPos = posSeconds > 0;
+  const btnIcon = isCurrentlyPlaying
+    ? svg('<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>')
+    : hasPos ? svg(Player.resumeIcon())
+    : svg(Player.playIcon());
+  const btnTitle = isCurrentlyPlaying ? "Pause" : hasPos ? "Resume" : "Play";
+  const playBtnHTML = `<button class="btn btn-ghost btn-sm btn-icon ep-play-btn"
+      data-action="play-episode" data-ep-id="${playerEp.id}"
+      ${hasPos ? 'data-resumable="1" data-resume="1"' : ''}
+      title="${btnTitle}">${btnIcon}</button>`;
+
+  const itemHTML = `
+    <div class="activity-item" id="cl-ep-${playerEp.id}">
+      <div class="activity-icon" style="cursor:pointer"
+           data-action="navigate" data-path="/feeds/${playerEp.feedId}" data-ep-scroll="${playerEp.id}">
+        ${_thumb(playerEp.imageUrl)}
+      </div>
+      <div class="activity-info" style="flex:1;min-width:0">
+        <div class="activity-title truncate" style="cursor:pointer"
+             data-action="navigate" data-path="/feeds/${playerEp.feedId}" data-ep-scroll="${playerEp.id}">${escHTML(playerEp.title || "Untitled")}</div>
+        <div class="activity-sub">
+          <span class="feed-link" data-action="navigate" data-path="/feeds/${playerEp.feedId}">${escHTML(playerEp.feedTitle || "")}</span>${minsIn ? ` · ${minsIn}` : ""}
+        </div>
+      </div>
+      ${playBtnHTML}
+      <button class="btn btn-ghost btn-sm btn-icon" title="Mark as played"
+              data-action="mark-cl-played" data-ep-id="${playerEp.id}">
+        ${svg('<polyline points="20 6 9 17 4 12"/>')}
+      </button>
+    </div>`;
+
+  const clCard = document.getElementById("cl-card");
+  if (clCard) {
+    clCard.querySelector(".section-title")?.insertAdjacentHTML("afterend", itemHTML);
+  } else {
+    anchor.insertAdjacentHTML("beforebegin", `
+      <div class="card suggest-fade-in" id="cl-card" style="margin-bottom:12px">
+        <div class="card-body">
+          <div class="section-title">Continue Listening</div>
+          ${itemHTML}
+        </div>
+      </div>`);
+    const newCard = document.getElementById("cl-card");
+    newCard?.addEventListener("animationend", () => newCard.classList.remove("suggest-fade-in"), { once: true });
+  }
+}
+
+// ============================================================
 // Dashboard view
 // ============================================================
 async function viewDashboard() {
@@ -172,7 +241,7 @@ async function viewDashboard() {
     </div>
 
       ${continueEps.length > 0 ? `
-      <div class="card" style="margin-bottom:12px">
+      <div class="card" id="cl-card" style="margin-bottom:12px">
         <div class="card-body">
           <div class="section-title">Continue Listening</div>
           ${continueEps.map((ep) => {
@@ -200,7 +269,7 @@ async function viewDashboard() {
         </div>
       </div>` : ""}
 
-      <div class="card" style="margin-bottom:12px">
+      <div class="card" id="newest-episodes-card" style="margin-bottom:12px">
         <div class="card-body">
           <div class="section-title">Newest Episodes</div>
           ${recentDL.length === 0
@@ -303,4 +372,12 @@ async function viewDashboard() {
     </div>`;
 
   wireSyncAllBtn("#btn-sync-all-dash");
+
+  // Keep Continue Listening in sync with the player while this view is rendered
+  window._onPlayerEpisodeStarted = (ep) => {
+    if ((ep.resumeAt || 0) > 30) _upsertCLItem(ep, ep.resumeAt);
+  };
+  window._onPlayerEpisodeStopped = (ep, pos) => {
+    if (pos > 30) _upsertCLItem(ep, pos);
+  };
 }
