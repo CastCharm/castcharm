@@ -532,12 +532,38 @@ def get_feed_episodes(
     else:
         q = q.order_by(Episode.published_at.desc().nullslast(), Episode.id.desc())
     episodes = q.offset(offset).limit(limit).all()
+
+    # Pre-resolve effective image URL for each feed in the group (cover.jpg > custom > RSS URL)
+    feed_art: dict[int, str | None] = {}
+    try:
+        from app.downloader import get_podcast_folder
+        for fid, src in feed_map.items():
+            if src.custom_image_url:
+                feed_art[fid] = src.custom_image_url
+            else:
+                try:
+                    folder = get_podcast_folder(src, db)
+                    if folder and os.path.exists(os.path.join(folder, "cover.jpg")):
+                        feed_art[fid] = f"/api/feeds/{fid}/cover.jpg"
+                    else:
+                        feed_art[fid] = src.image_url
+                except Exception:
+                    feed_art[fid] = src.image_url
+    except Exception:
+        for fid, src in feed_map.items():
+            feed_art[fid] = src.custom_image_url or src.image_url
+
     result = []
     for ep in episodes:
         out = EpisodeOut.model_validate(ep)
         src = feed_map.get(ep.feed_id, feed)
         out.feed_title = src.title
-        out.feed_image_url = src.image_url
+        out.feed_image_url = feed_art.get(ep.feed_id, src.image_url)
+        # Prefer local art sidecar over remote URL when no custom_image_url is set
+        if not ep.custom_image_url and ep.file_path:
+            art_path = os.path.splitext(ep.file_path)[0] + ".jpg"
+            if os.path.exists(art_path):
+                out.episode_image_url = f"/api/episodes/{ep.id}/cover.jpg"
         if ep.status == "downloaded" and ep.file_path and not os.path.exists(ep.file_path):
             out.file_missing = True
         result.append(out)
