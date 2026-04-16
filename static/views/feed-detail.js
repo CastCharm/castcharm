@@ -142,7 +142,12 @@ function _renderFeedErrorBanner(feed) {
 // does a surgical episode+stats refresh so the new episodes appear without a full reload.
 // Extracted as a standalone function so it can be called both on page load and immediately
 // after the user starts a new import from the Import Files modal.
-async function _pollImportBanner(feedId) {
+//
+// refreshOnDone — pass true when called right after starting an import (modal commit path).
+//   If the import finishes before the first status poll fires, we still need to refresh the
+//   episode list.  On page load we leave this false to avoid an extra fetch for a job that
+//   was already done when the page rendered.
+async function _pollImportBanner(feedId, refreshOnDone = false) {
   const banner = document.getElementById("import-banner");
   if (!banner) return;
 
@@ -188,6 +193,9 @@ async function _pollImportBanner(feedId) {
           }
         } catch (_) { clearInterval(pollId); }
       }, 1500);
+    } else if (refreshOnDone && s.status === "done" && (s.matched + s.created) > 0) {
+      // Import finished before the first poll fired — refresh now so new episodes appear.
+      await Promise.all([_refreshEpisodeList(), _refreshFeedStats()]);
     }
   } catch (_) {
     // 404 means no import job yet — that's expected on a fresh page load
@@ -2610,7 +2618,7 @@ function showImportFilesModal(feedId, feed) {
                 phase.textContent = "Counting files\u2026";
                 file.textContent = "";
               } else if (s.phase === "scanning") {
-                phase.textContent = `Scanning feed for matches: file ${s.current} of ${s.total}\u2026`;
+                phase.textContent = `Reading files and searching for matches: ${s.current} of ${s.total}\u2026`;
                 file.textContent = s.message || "";
               }
             }).catch(() => {});
@@ -2770,7 +2778,7 @@ function showImportFilesModal(feedId, feed) {
               await API.commitImport(feedId, items, _filenameFormat || null);
               Modal.close();
               Toast.success("Import started \u2014 check the banner above the episode list for progress.");
-              _pollImportBanner(feedId);
+              _pollImportBanner(feedId, true);
             } catch (e) {
               Toast.error(e.message);
               importAllBtn.disabled = false;
@@ -3062,7 +3070,7 @@ function showImportFilesModal(feedId, feed) {
             await API.commitImport(feedId, items, _filenameFormat || null);
             Modal.close();
             Toast.success("Import started \u2014 check the banner above the episode list for progress.");
-            _pollImportBanner(feedId);
+            _pollImportBanner(feedId, true);
           } catch (e) {
             errEl.textContent = e.message;
             errEl.style.display = "block";
