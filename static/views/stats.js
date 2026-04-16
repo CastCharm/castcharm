@@ -179,10 +179,13 @@ function _buildDiskUseCardInner(data) {
   </div>`;
 }
 
-function _buildDownloadedCardInner(data) {
+function _buildListenTimeCardInner(data) {
+  const withTime = data.by_feed.filter(f => (f.listen_seconds || 0) > 0);
   return `<div class="card-body">
-    <div class="section-title" style="margin-bottom:14px">Downloaded by Podcast</div>
-    ${_donutChart(data.by_feed.map(f => ({ label: f.title, value: f.downloaded_count })), (v) => v.toLocaleString())}
+    <div class="section-title" style="margin-bottom:14px">Listen Time by Podcast</div>
+    ${withTime.length > 0
+      ? _donutChart(withTime.map(f => ({ label: f.title, value: f.listen_seconds })), fmtRuntime)
+      : `<div style="color:var(--text-3);font-size:13px">No playback data yet</div>`}
   </div>`;
 }
 
@@ -269,7 +272,7 @@ function _renderOverviewInner(data, feedTitle) {
       <div class="card" id="sc-status">${_buildStatusCardInner(s)}</div>
       ${showDiskDl ? `
         <div class="card" id="sc-diskuse">${_buildDiskUseCardInner(data)}</div>
-        <div class="card" id="sc-downloaded">${_buildDownloadedCardInner(data)}</div>
+        <div class="card" id="sc-listen-time">${_buildListenTimeCardInner(data)}</div>
       ` : `
         <div class="card" id="sc-duration">${_buildDurationCardInner(data)}</div>
       `}
@@ -564,8 +567,8 @@ function _durationOverlayChart(feedDurations) {
       line += ` L ${pts[i][0].toFixed(1)} ${pts[i][1].toFixed(1)}`;
     }
     const area = `${line} L ${pts[pts.length - 1][0].toFixed(1)} ${baseline} L ${pts[0][0].toFixed(1)} ${baseline} Z`;
-    return `<path d="${area}" style="fill:${color};opacity:0.08"/>
-            <path d="${line}" style="fill:none;stroke:${color};stroke-width:1.5;stroke-linejoin:round;opacity:0.75"/>`;
+    return `<path d="${area}" style="fill:${color};opacity:0.04"/>
+            <path d="${line}" style="fill:none;stroke:${color};stroke-width:1;stroke-linejoin:round;opacity:0.35"/>`;
   }).join("");
 
   const fmt = v => {
@@ -613,17 +616,17 @@ function _durationOverlayChart(feedDurations) {
     <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block">
       ${hasSD ? `
         <rect x="${sdLowX.toFixed(1)}" y="${mt}" width="${(sdHighX - sdLowX).toFixed(1)}" height="${ph}"
-              style="fill:var(--primary);opacity:0.08"/>
+              style="fill:var(--primary);opacity:0.18"/>
         <line x1="${sdLowX.toFixed(1)}" y1="${mt}" x2="${sdLowX.toFixed(1)}" y2="${baseline}"
-              style="stroke:var(--primary);stroke-width:1;stroke-dasharray:3,2;opacity:0.45"/>
+              style="stroke:var(--primary);stroke-width:1.5;stroke-dasharray:4,2;opacity:0.7"/>
         <line x1="${sdHighX.toFixed(1)}" y1="${mt}" x2="${sdHighX.toFixed(1)}" y2="${baseline}"
-              style="stroke:var(--primary);stroke-width:1;stroke-dasharray:3,2;opacity:0.45"/>
-        <text x="${sdLowX.toFixed(1)}" y="${mt - 2}" style="fill:var(--text-3);font-size:7px;text-anchor:middle">−1σ</text>
-        <text x="${sdHighX.toFixed(1)}" y="${mt - 2}" style="fill:var(--text-3);font-size:7px;text-anchor:middle">+1σ</text>
+              style="stroke:var(--primary);stroke-width:1.5;stroke-dasharray:4,2;opacity:0.7"/>
+        <text x="${sdLowX.toFixed(1)}" y="${mt - 2}" style="fill:var(--text-2);font-size:8px;font-weight:600;text-anchor:middle">−1σ</text>
+        <text x="${sdHighX.toFixed(1)}" y="${mt - 2}" style="fill:var(--text-2);font-size:8px;font-weight:600;text-anchor:middle">+1σ</text>
       ` : ""}
       ${paths}
       <line x1="${meanX.toFixed(1)}" y1="${mt}" x2="${meanX.toFixed(1)}" y2="${baseline}"
-            style="stroke:var(--primary);stroke-width:1.5;opacity:0.65"/>
+            style="stroke:var(--primary);stroke-width:2.5;opacity:0.9"/>
       <line x1="${ml}" y1="${baseline}" x2="${W - mr}" y2="${baseline}" style="stroke:var(--border);stroke-width:1"/>
       ${xTicks}
     </svg>
