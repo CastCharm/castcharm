@@ -480,12 +480,14 @@ const Player = (() => {
     _showBar();
     _updateSpeedDisplay();
     setTimeout(_syncPlayBtns, 50);
+    window._onPlayerEpisodeStarted?.(ep);
   }
 
   // ── Close / stop player ────────────────────────────────────
 
   function _closePlayer() {
-    const stoppedId = _currentEp?.id;
+    const stoppedEp  = _currentEp;
+    const stoppedId  = _currentEp?.id;
     const stoppedPos = (_audio && isFinite(_audio.currentTime)) ? _audio.currentTime : 0;
     // Flush the exact stop position to the server before tearing down
     if (_currentEp && stoppedPos > 0) {
@@ -512,6 +514,9 @@ const Player = (() => {
       });
     }
     _syncPlayBtns();
+    if (stoppedEp && stoppedPos > 0 && !_autoPlayedFired) {
+      window._onPlayerEpisodeStopped?.(stoppedEp, stoppedPos);
+    }
   }
 
   // ── DOM wiring ─────────────────────────────────────────────
@@ -659,12 +664,34 @@ const Player = (() => {
           finish();
         }
       } else {
-        API.togglePlayed(epId)
-          .then(() => {
-            _afterMarkPlayed(epId);
-            Toast.success("Marked as played");
-          })
-          .catch((e) => Toast.error(e.message));
+        const duration = (_audio && _audio.duration && isFinite(_audio.duration))
+          ? Math.floor(_audio.duration) : null;
+        _audio.pause();
+        _audio.src = "";
+        _clearSleepTimer();
+        _sleepMinutes = 0;
+        _currentEp = null;
+        _afterMarkPlayed(epId);
+        _collapse();
+        _el("player-bar")?.classList.add("hidden");
+        document.body.classList.remove("has-player");
+
+        const finish = () => {
+          API.togglePlayed(epId).catch(() => {});
+          const row = document.getElementById(`ep-${epId}`);
+          const fill = row?.querySelector(".ep-listen-fill");
+          const label = row?.querySelector(".ep-listen-label");
+          if (fill) fill.style.width = "100%";
+          if (label) { label.textContent = "100% listened"; label.classList.add("ep-listen-complete"); }
+          row?.querySelector(".ep-listen-bar-wrap")?.classList.add("ep-complete");
+          Toast.success("Marked as played");
+        };
+
+        if (duration) {
+          API.updateProgress(epId, duration).then(finish).catch(finish);
+        } else {
+          finish();
+        }
       }
     });
 
