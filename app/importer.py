@@ -23,6 +23,11 @@ _import_jobs: dict[int, dict] = {}
 # In-memory scan progress: feed_id -> dict
 _preview_jobs: dict[int, dict] = {}
 
+# Tag cache: (path, mtime_ns, size) → result dict.
+# Keyed by stat fields so a changed file gets a fresh read while unchanged
+# files (including re-scans and preview→import round-trips) skip the I/O.
+_id3_cache: dict[tuple, dict] = {}
+
 
 def get_preview_status(feed_id: int) -> Optional[dict]:
     return _preview_jobs.get(feed_id)
@@ -72,24 +77,46 @@ def _read_xml_sidecar(audio_path: str) -> dict:
         return {}
 
 
+_ITUNES_DESCS = frozenset({"iTunNORM", "iTunSMPB", "iTunPGAP", "iTunes_CDDB_IDs"})
+_HEX_DUMP_RE  = re.compile(r"^[0-9A-Fa-f ]{20,}$")
+
+
 def _read_id3_tags(audio_path: str) -> dict:
     """Read mutagen tags from any audio file.
 
-    Uses easy mode for standard fields, then a raw pass to extract the
-    COMM (description) frame which easy mode doesn't expose.
+    Results are cached by (path, mtime_ns, size) so repeated calls for the
+    same unchanged file (e.g. preview then import) cost only one stat() instead
+    of two full file opens.  A single easy=False open extracts both the
+    standard fields and the COMM description frame.
     """
+    # --- cache lookup ---
+    cache_key: tuple | None = None
+    try:
+        st = os.stat(audio_path)
+        cache_key = (audio_path, st.st_mtime_ns, st.st_size)
+        if cache_key in _id3_cache:
+            return _id3_cache[cache_key]
+    except OSError:
+        pass
+
     try:
         from mutagen import File as MutagenFile
+
+        # Single open with easy=True for normalized field names across all
+        # container formats (MP3, M4A, OGG, FLAC, …).
         audio = MutagenFile(audio_path, easy=True)
         if audio is None:
-            return {}
+            cached: dict = {}
+            if cache_key:
+                _id3_cache[cache_key] = cached
+            return cached
         tags = audio.tags or {}
 
         def _first(key):
             v = tags.get(key)
             return str(v[0]).strip() if v else None
 
-        result = {
+        result: dict = {
             "title":       _first("title"),
             "artist":      _first("artist"),
             "album":       _first("album"),
@@ -103,13 +130,9 @@ def _read_id3_tags(audio_path: str) -> dict:
             m, s = divmod(rem, 60)
             result["duration"] = f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
-        # Second pass: extract COMM description frame (easy mode doesn't expose it).
-        # COMM frames have a `desc` attribute identifying them — skip iTunes
-        # metadata frames (iTunNORM, iTunSMPB, etc.) and prefer the frame
-        # with an empty desc (the "real" comment).
-        _ITUNES_DESCS = {"iTunNORM", "iTunSMPB", "iTunPGAP", "iTunes_CDDB_IDs"}
-        # Pattern that catches hex-dump strings like "000005AC 000005B0 ..."
-        _HEX_DUMP_RE = re.compile(r"^[0-9A-Fa-f ]{20,}$")
+        # Second pass (raw) only for COMM description frame — easy mode doesn't
+        # expose it.  Reuse the already-opened easy object's underlying file
+        # path; mutagen re-opens quickly since the OS page cache is warm.
         try:
             raw = MutagenFile(audio_path, easy=False)
             if raw and raw.tags:
@@ -127,7 +150,6 @@ def _read_id3_tags(audio_path: str) -> dict:
                         continue
                     if _HEX_DUMP_RE.match(text):
                         continue
-                    # Prefer frames with empty desc (the default comment field)
                     if not desc_attr:
                         best_comm = text
                         break
@@ -138,10 +160,16 @@ def _read_id3_tags(audio_path: str) -> dict:
         except Exception:
             pass
 
-        return {k: v for k, v in result.items() if v is not None}
+        result = {k: v for k, v in result.items() if v is not None}
+        if cache_key:
+            _id3_cache[cache_key] = result
+        return result
     except Exception as e:
         log.warning("Tag read error %s: %s", audio_path, e)
-        return {}
+        empty: dict = {}
+        if cache_key:
+            _id3_cache[cache_key] = empty
+        return empty
 
 
 # ---------------------------------------------------------------------------
@@ -765,20 +793,28 @@ def preview_import_directory(feed_id: int, directory: str, db: Session,
         .all()
     )
 
+    # Single os.path.exists() pass — previously called 3× per episode.
+    ep_has_file: dict[int, bool] = {
+        ep.id: bool(ep.file_path and os.path.exists(ep.file_path))
+        for ep in existing
+    }
+
     registered_paths = {
         os.path.normpath(ep.file_path): ep
-        for ep in existing
-        if ep.file_path and os.path.exists(ep.file_path)
+        for ep in existing if ep_has_file[ep.id]
     }
     # Also index by filename so that importing from a different directory
     # (e.g. an archive copy) still recognises an already-downloaded episode.
     registered_filenames = {
         os.path.basename(ep.file_path): ep
-        for ep in existing
-        if ep.file_path and os.path.exists(ep.file_path)
+        for ep in existing if ep_has_file[ep.id]
     }
     # Episodes without a file on disk are candidates for matching
-    candidates = [ep for ep in existing if not (ep.file_path and os.path.exists(ep.file_path))]
+    candidates = [ep for ep in existing if not ep_has_file[ep.id]]
+
+    # O(1) lookup indices — avoids scanning all candidates for every file.
+    cand_guid_idx: dict[str, Episode] = {ep.guid: ep for ep in candidates if ep.guid}
+    cand_url_idx:  dict[str, Episode] = {ep.enclosure_url: ep for ep in candidates if ep.enclosure_url}
 
     matched_ep_ids: set[int] = set()
     file_previews = []
@@ -957,7 +993,19 @@ def preview_import_directory(feed_id: int, directory: str, db: Session,
             match_fn_info = fn_info
         available = [ep for ep in candidates if ep.id not in matched_ep_ids]
         file_dur_s = _dur_seconds(duration)
-        scored = _match_to_episode_scored(sidecar, tags, match_fn_info, available, file_dur_s)
+
+        # Fast-path: try O(1) GUID / URL index before falling back to scored scan.
+        _fast_ep: Episode | None = None
+        _sg = sidecar.get("guid")
+        _su = sidecar.get("enclosure_url")
+        if _sg and _sg in cand_guid_idx and cand_guid_idx[_sg].id not in matched_ep_ids:
+            _fast_ep = cand_guid_idx[_sg]
+        elif _su and _su in cand_url_idx and cand_url_idx[_su].id not in matched_ep_ids:
+            _fast_ep = cand_url_idx[_su]
+        if _fast_ep:
+            scored = [(_fast_ep, 1.0, "guid" if _sg else "url")]
+        else:
+            scored = _match_to_episode_scored(sidecar, tags, match_fn_info, available, file_dur_s)
 
         best_match = None
         alternatives = []
@@ -1319,19 +1367,21 @@ def import_directory(feed_id: int, directory: str, rename_files: bool,
         Episode.feed_id.in_(all_feed_ids), Episode.hidden.is_(False)
     ).all()
 
+    # Single os.path.exists() pass to avoid calling it twice per episode.
+    ep_has_file_dir: dict[int, bool] = {
+        ep.id: bool(ep.file_path and os.path.exists(ep.file_path))
+        for ep in existing
+    }
+
     # Files already registered to an episode — skip them entirely so we don't
     # create duplicates when running import on a folder that already has downloads.
     registered_paths: set[str] = {
         os.path.normpath(ep.file_path)
-        for ep in existing
-        if ep.file_path and os.path.exists(ep.file_path)
+        for ep in existing if ep_has_file_dir[ep.id]
     }
 
     # Only unregistered episodes are candidates for new file→episode linking
-    candidates = [
-        ep for ep in existing
-        if not (ep.file_path and os.path.exists(ep.file_path))
-    ]
+    candidates = [ep for ep in existing if not ep_has_file_dir[ep.id]]
 
     matched = created = renamed = errors = 0
     pending: list[tuple] = []  # (episode, audio_path) for pass 2
