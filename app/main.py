@@ -120,9 +120,24 @@ app = FastAPI(
     description="Self-hosted podcast manager",
     version=APP_VERSION,
     lifespan=lifespan,
-    docs_url="/api/docs",
+    docs_url=None,
     redoc_url=None,
 )
+
+@app.get("/api/docs", include_in_schema=False)
+async def swagger_ui():
+    html = """<!DOCTYPE html>
+<html><head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>CastCharm API</title>
+  <link rel="stylesheet" href="/static/swagger/swagger-ui.css">
+</head><body>
+  <div id="swagger-ui"></div>
+  <script src="/static/swagger/swagger-ui-bundle.js"></script>
+  <script src="/static/swagger/swagger-init.js"></script>
+</body></html>"""
+    return HTMLResponse(html)
 
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
