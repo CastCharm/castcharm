@@ -6,6 +6,8 @@
 // external script sources. All referenced functions are defined in the scripts
 // loaded before main.js (router.js, ui.js, search.js).
 // ============================================================
+document.querySelectorAll("[data-cc-icon]").forEach(el => { el.outerHTML = appIconSvg(el.className); });
+
 document.getElementById("sidebar-overlay").addEventListener("click", closeSidebar);
 document.getElementById("nav-search-btn").addEventListener("click", showSearch);
 document.getElementById("hamburger").addEventListener("click", toggleSidebar);

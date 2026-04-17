@@ -57,7 +57,7 @@ function _renderSetupStep() {
   el.innerHTML = `
     <div class="wiz-page">
       <div class="wiz-header">
-        <img src="/static/icon-64.png" alt="" class="wiz-logo-img" />
+        ${appIconSvg("wiz-logo-img")}
         <div>
           <div class="wiz-logo-name">CastCharm</div>
           <div class="wiz-logo-sub">Setup — step ${s.step} of ${s.totalSteps}</div>

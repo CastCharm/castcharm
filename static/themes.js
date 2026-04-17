@@ -357,6 +357,13 @@ function applyTheme(name) {
   for (const [k, v] of Object.entries(theme.vars)) {
     root.style.setProperty(k, v);
   }
+  root.style.setProperty("--icon-bg-1",       theme.vars["--bg"]);
+  root.style.setProperty("--icon-bg-2",       theme.vars["--bg-2"]);
+  root.style.setProperty("--icon-glow-bg",    theme.vars["--primary"]);
+  root.style.setProperty("--icon-glow-color", theme.vars["--primary"]);
+  root.style.setProperty("--icon-grad-a",     "#fef08a");
+  root.style.setProperty("--icon-grad-b",     theme.vars["--primary"]);
+  root.style.setProperty("--icon-grad-c",     theme.vars["--chart-2"] || theme.vars["--primary"]);
 }
 
 // Apply cached theme immediately to prevent flash on load
