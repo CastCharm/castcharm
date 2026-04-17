@@ -187,6 +187,29 @@ def enqueue_download(episode_id: int) -> None:  # noqa: ARG001
     _wake_event.set()
 
 
+def auto_download_new_episodes(feed, new_ids: list[int], db) -> None:
+    """Queue and enqueue newly discovered episodes if auto-download is enabled for the feed."""
+    from app.models import Episode, GlobalSettings
+    auto_dl = feed.auto_download_new
+    if auto_dl is None:
+        gs = db.query(GlobalSettings).first()
+        auto_dl = gs.auto_download_new if gs else True
+    if not auto_dl:
+        return
+    now = datetime.utcnow()
+    episodes = (
+        db.query(Episode)
+        .filter(Episode.id.in_(new_ids), Episode.status == "pending")
+        .all()
+    )
+    for ep in episodes:
+        ep.status = "queued"
+        ep.queued_at = now
+    db.commit()
+    for ep in episodes:
+        enqueue_download(ep.id)
+
+
 def get_active_progress() -> dict[int, int]:
     """Return a snapshot of in-memory download progress (episode_id -> 0-100)."""
     with _active_progress_lock:

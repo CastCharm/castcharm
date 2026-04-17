@@ -1114,28 +1114,13 @@ def _bg_sync(feed_id: int):
             feed.last_error = str(e)
             log.error("Sync failed for %s (id=%d): %s", feed.title or feed.url, feed_id, e)
 
-        # Auto-download newly discovered episodes (skip on initial sync)
         if not was_initial and new_ids:
             try:
-                auto_dl = feed.auto_download_new
-                if auto_dl is None:
-                    settings = db.query(GlobalSettings).first()
-                    auto_dl = settings.auto_download_new if settings else True
-                if auto_dl:
-                    from app.downloader import enqueue_download
-                    now = datetime.utcnow()
-                    for ep_id in new_ids:
-                        ep = db.query(Episode).filter(Episode.id == ep_id).first()
-                        if ep and ep.status == "pending":
-                            ep.status = "queued"
-                            ep.queued_at = now
-                    db.commit()
-                    for ep_id in new_ids:
-                        enqueue_download(ep_id)
+                from app.downloader import auto_download_new_episodes
+                auto_download_new_episodes(feed, new_ids, db)
             except Exception as e:
                 log.warning("auto_download_new failed for feed %d: %s", feed_id, e)
 
-        # If user requested "download all" on first sync, queue every episode now
         if was_initial and feed.download_all_on_first_sync:
             try:
                 primary_id_dl = feed.primary_feed_id or feed.id

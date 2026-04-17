@@ -83,24 +83,9 @@ def _refresh_feed_job(feed_id: int):
             from app.routers.episodes import recalc_seq_numbers
             recalc_seq_numbers(primary_id, db)
 
-            # Auto-download newly discovered episodes (skip on initial sync)
             if was_complete and new_ids:
-                auto_dl = feed.auto_download_new
-                if auto_dl is None:
-                    gs = db.query(GlobalSettings).first()
-                    auto_dl = gs.auto_download_new if gs else True
-
-                if auto_dl:
-                    from app.downloader import enqueue_download
-                    now = datetime.utcnow()
-                    for ep_id in new_ids:
-                        ep = db.query(Episode).filter(Episode.id == ep_id).first()
-                        if ep and ep.status == "pending":
-                            ep.status = "queued"
-                            ep.queued_at = now
-                    db.commit()
-                    for ep_id in new_ids:
-                        enqueue_download(ep_id)
+                from app.downloader import auto_download_new_episodes
+                auto_download_new_episodes(feed, new_ids, db)
 
         except Exception as e:
             log.warning("Feed %d refresh failed: %s", feed_id, e)

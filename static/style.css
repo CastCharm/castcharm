@@ -117,7 +117,7 @@ img { display: block; }
   font-weight: 800;
   letter-spacing: -0.4px;
   line-height: 1.1;
-  background: linear-gradient(120deg, #c4b5fd 0%, #818cf8 55%, #6366f1 100%);
+  background: linear-gradient(120deg, var(--primary) 0%, var(--chart-2, var(--primary)) 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
