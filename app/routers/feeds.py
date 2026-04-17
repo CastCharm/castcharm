@@ -1101,17 +1101,39 @@ def _bg_sync(feed_id: int):
             return
         was_initial = not feed.initial_sync_complete
         log.info("Syncing: %s (id=%d)", feed.title or feed.url, feed_id)
+        new_ids = []
         try:
             lookback = None
             if not was_initial:
                 settings = db.query(GlobalSettings).first()
                 limit = settings.sync_lookback_limit if settings else 50
                 lookback = limit if limit and limit > 0 else None
-            sync_feed_episodes(feed, db, lookback_limit=lookback)
+            new_ids, _skipped = sync_feed_episodes(feed, db, lookback_limit=lookback)
             feed.last_error = None
         except Exception as e:
             feed.last_error = str(e)
             log.error("Sync failed for %s (id=%d): %s", feed.title or feed.url, feed_id, e)
+
+        # Auto-download newly discovered episodes (skip on initial sync)
+        if not was_initial and new_ids:
+            try:
+                auto_dl = feed.auto_download_new
+                if auto_dl is None:
+                    settings = db.query(GlobalSettings).first()
+                    auto_dl = settings.auto_download_new if settings else True
+                if auto_dl:
+                    from app.downloader import enqueue_download
+                    now = datetime.utcnow()
+                    for ep_id in new_ids:
+                        ep = db.query(Episode).filter(Episode.id == ep_id).first()
+                        if ep and ep.status == "pending":
+                            ep.status = "queued"
+                            ep.queued_at = now
+                    db.commit()
+                    for ep_id in new_ids:
+                        enqueue_download(ep_id)
+            except Exception as e:
+                log.warning("auto_download_new failed for feed %d: %s", feed_id, e)
 
         # If user requested "download all" on first sync, queue every episode now
         if was_initial and feed.download_all_on_first_sync:
