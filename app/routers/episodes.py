@@ -656,7 +656,8 @@ def toggle_played(episode_id: int, db: Session = Depends(get_db)):
     if ep.played:
         ep.last_played_at = datetime.utcnow()
         if ep.duration:
-            ep.play_position_seconds = ep.duration
+            from app.routers.stats import _parse_seconds
+            ep.play_position_seconds = _parse_seconds(ep.duration)
     else:
         ep.play_position_seconds = 0
     db.commit()
