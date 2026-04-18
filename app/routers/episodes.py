@@ -655,6 +655,10 @@ def toggle_played(episode_id: int, db: Session = Depends(get_db)):
     ep.played = not ep.played
     if ep.played:
         ep.last_played_at = datetime.utcnow()
+        if ep.duration:
+            ep.play_position_seconds = ep.duration
+    else:
+        ep.play_position_seconds = 0
     db.commit()
     db.refresh(ep)
     log.info("Episode marked %s: '%s' (ep %d)", "played" if ep.played else "unplayed", ep.title or "Untitled", episode_id)
