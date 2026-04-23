@@ -26,6 +26,7 @@ window._setTabBadge = _setTabBadge;
 let _dlPollInterval = null;
 let _dlPollHadItems = false; // true once we've seen a non-zero queue during this session
 let _downloadedPollInterval = null;
+let _failedPollInterval = null;
 
 function _stopDLPoll() {
   if (_dlPollInterval) {
@@ -35,6 +36,10 @@ function _stopDLPoll() {
   if (_downloadedPollInterval) {
     clearInterval(_downloadedPollInterval);
     _downloadedPollInterval = null;
+  }
+  if (_failedPollInterval) {
+    clearInterval(_failedPollInterval);
+    _failedPollInterval = null;
   }
   _dlPollHadItems = false;
   window._dlPollZeroCount = 0;
@@ -117,6 +122,58 @@ async function _doDownloadedPollTick() {
 function _startDownloadedPoll() {
   _doDownloadedPollTick();
   _downloadedPollInterval = setInterval(_doDownloadedPollTick, 3000);
+}
+
+// _doFailedPollTick runs every 3 s while the Failed tab is active so newly
+// failed downloads appear live rather than waiting for a page refresh.
+async function _doFailedPollTick() {
+  if (window._dlActiveTab !== "failed") { _stopDLPoll(); return; }
+  const tc = document.getElementById("dl-tab-content");
+  if (!tc) { _stopDLPoll(); return; }
+
+  try {
+    const failed = await API.getEpisodes({ status: "failed", limit: 100 });
+    if (window._dlActiveTab !== "failed") return;
+
+    const prev = window._dlData?.failed || [];
+    const prevIds = new Set(prev.map(e => e.id));
+    const currentIds = new Set(failed.map(e => e.id));
+    const unchanged = prev.length === failed.length && prev.every(e => currentIds.has(e.id));
+
+    if (window._dlData) window._dlData.failed = failed;
+    _setTabBadge("badge-failed", failed.length, "badge-error");
+
+    if (unchanged) return;
+
+    const list = document.getElementById("dl-episode-list");
+    // If the list is empty (or only has an empty-state), we need the action bar
+    // too — do a full re-render.  Same if going from N>0 to 0.
+    if (!list || failed.length === 0 || prev.length === 0) {
+      tc.innerHTML = _renderFailedTab(failed);
+      _wireFailedActions();
+      return;
+    }
+
+    // Incremental: prepend new rows, remove rows no longer failed.
+    for (const row of [...list.querySelectorAll(".episode-item")]) {
+      const id = Number(row.id.replace("dl-ep-", ""));
+      if (!currentIds.has(id)) animateRemove(row);
+    }
+    const newEps = failed.filter(e => !prevIds.has(e.id));
+    if (newEps.length > 0) {
+      list.insertAdjacentHTML("afterbegin", newEps.map(renderDLRow).join(""));
+      for (const ep of newEps) {
+        const row = document.getElementById(`dl-ep-${ep.id}`);
+        if (row) animateEnter(row);
+      }
+    }
+    const retryBtn = document.getElementById("btn-retry-all-tab");
+    if (retryBtn) retryBtn.innerHTML = `${svg('<polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.5"/>')} Retry All (${failed.length})`;
+  } catch (_) {}
+}
+
+function _startFailedPoll() {
+  _failedPollInterval = setInterval(_doFailedPollTick, 3000);
 }
 
 async function viewDownloads() {
@@ -507,6 +564,7 @@ window.switchDLTab = function (tabId, btn) {
       tabContent.innerHTML = _renderFailedTab(window._dlData.failed || []);
       _wireFailedActions();
     });
+    _startFailedPoll();
   }
 
   _fadeInTabContent(tabContent);
