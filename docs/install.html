@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Installation — CastCharm</title>
+  <meta name="description" content="How to install CastCharm using Docker Compose." />
+  <link rel="stylesheet" href="style.css" />
+  <link rel="icon" type="image/svg+xml" href="assets/icon.svg" />
+</head>
+<body>
+
+  <!-- Nav -->
+  <nav class="site-nav">
+    <a class="nav-logo" href="index.html">
+      <img src="assets/icon.svg" alt="CastCharm icon" />
+      <span class="nav-logo-text">CastCharm</span>
+    </a>
+    <div class="nav-links" id="nav-links">
+      <a class="nav-link" href="index.html">Home</a>
+      <a class="nav-link active" href="install.html">Install</a>
+      <a class="nav-link" href="android.html">Android</a>
+      <a class="nav-link" href="privacy.html">Privacy</a>
+      <a class="nav-link nav-link-mobile-only" href="https://github.com/CastCharm/castcharm" target="_blank" rel="noopener">GitHub ↗</a>
+    </div>
+    <button class="hamburger" id="hamburger" aria-label="Toggle menu" aria-expanded="false">
+      <span></span><span></span><span></span>
+    </button>
+    <div class="nav-right">
+      <a class="btn btn-ghost btn-sm" href="https://github.com/CastCharm/castcharm" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.477 2 12c0 4.418 2.865 8.166 6.839 9.489.5.092.682-.217.682-.482 0-.237-.009-.868-.013-1.703-2.782.604-3.369-1.342-3.369-1.342-.454-1.155-1.11-1.463-1.11-1.463-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0 1 12 6.836a9.59 9.59 0 0 1 2.504.337c1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.202 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.163 22 16.418 22 12c0-5.523-4.477-10-10-10z"/></svg>
+        GitHub
+      </a>
+    </div>
+  </nav>
+
+  <div class="content-wrap">
+    <div class="content-page">
+
+      <h1>Installation</h1>
+      <p class="page-meta">Docker + Docker Compose · runs on any Linux, macOS, or Windows host</p>
+
+      <!-- Requirements -->
+      <h2>Requirements</h2>
+      <ul>
+        <li><a href="https://docs.docker.com/engine/install/" target="_blank" rel="noopener">Docker Engine</a> 20.10 or later</li>
+        <li><a href="https://docs.docker.com/compose/install/" target="_blank" rel="noopener">Docker Compose</a> v2 (the <code>docker compose</code> plugin, not the legacy <code>docker-compose</code>)</li>
+      </ul>
+
+      <!-- Quick start -->
+      <h2>Quick start</h2>
+      <p>The fastest path to a running instance:</p>
+
+      <div class="code-card">
+        <div class="code-header">
+          <div class="code-dots"><span></span><span></span><span></span></div>
+          <span>bash</span>
+        </div>
+        <pre><span class="comment"># Download the compose file</span>
+<span class="cmd"><span class="cmd-kw">curl</span> -O https://raw.githubusercontent.com/CastCharm/castcharm/main/docker-compose.yml</span>
+
+<span class="comment"># Start in the background</span>
+<span class="cmd"><span class="cmd-kw">docker</span> compose up -d</span></pre>
+      </div>
+
+      <p>Then open <strong>http://localhost:8000</strong> in your browser. A setup wizard will run on the first visit.</p>
+
+      <div class="callout">
+        <strong>Default paths:</strong> the database is saved to <code>./data/</code> and downloaded audio files go into <code>./downloads/</code>, both relative to the directory containing your <code>docker-compose.yml</code>.
+      </div>
+
+      <!-- Full compose file -->
+      <h2>Full docker-compose.yml</h2>
+      <p>Below is the complete file for reference. You can customise paths and the port via environment variables or a <code>.env</code> file placed in the same directory.</p>
+
+      <div class="code-card">
+        <div class="code-header">
+          <div class="code-dots"><span></span><span></span><span></span></div>
+          <span>docker-compose.yml</span>
+        </div>
+        <pre><span class="key">services</span><span class="cmd">:</span>
+  <span class="key">castcharm</span><span class="cmd">:</span>
+    <span class="key">image</span><span class="cmd">:</span> <span class="val">ghcr.io/castcharm/castcharm:latest</span>
+    <span class="key">container_name</span><span class="cmd">:</span> <span class="val">castcharm</span>
+    <span class="key">ports</span><span class="cmd">:</span>
+      - <span class="str">"${PORT:-8000}:8000"</span>
+    <span class="key">volumes</span><span class="cmd">:</span>
+      <span class="comment"># database and app state</span>
+      - <span class="val">${DATA_PATH:-./data}:/data</span>
+      <span class="comment"># downloaded audio files</span>
+      - <span class="val">${DOWNLOAD_PATH:-./downloads}:/downloads</span>
+    <span class="key">environment</span><span class="cmd">:</span>
+      - <span class="val">DATABASE_URL=sqlite:////data/castcharm.db</span>
+      - <span class="val">DEFAULT_DOWNLOAD_PATH=/downloads</span>
+      - <span class="val">CLEAN_RSS_PATH=/downloads/clean-rss</span>
+    <span class="key">restart</span><span class="cmd">:</span> <span class="val">unless-stopped</span>
+    <span class="key">security_opt</span><span class="cmd">:</span>
+      - <span class="val">no-new-privileges:true</span>
+    <span class="key">healthcheck</span><span class="cmd">:</span>
+      <span class="key">test</span><span class="cmd">:</span> <span class="val">["CMD", "curl", "-f", "http://localhost:8000/api/status"]</span>
+      <span class="key">interval</span><span class="cmd">:</span> <span class="val">30s</span>
+      <span class="key">timeout</span><span class="cmd">:</span> <span class="val">10s</span>
+      <span class="key">retries</span><span class="cmd">:</span> <span class="val">3</span>
+      <span class="key">start_period</span><span class="cmd">:</span> <span class="val">20s</span></pre>
+      </div>
+
+      <!-- Environment variables -->
+      <h2>Environment variables</h2>
+      <p>Set these in a <code>.env</code> file in the same folder as your <code>docker-compose.yml</code>, or pass them directly to the container.</p>
+
+      <table class="config-table">
+        <thead>
+          <tr>
+            <th>Variable</th>
+            <th>Default</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>PORT</td>
+            <td>8000</td>
+            <td>Host port the app is exposed on.</td>
+          </tr>
+          <tr>
+            <td>DATA_PATH</td>
+            <td>./data</td>
+            <td>Host path for the SQLite database and application state. Back this up to preserve all feeds, settings, and playback history.</td>
+          </tr>
+          <tr>
+            <td>DOWNLOAD_PATH</td>
+            <td>./downloads</td>
+            <td>Host path where audio files are saved. Point this at an existing media directory if you want CastCharm to manage files you already have.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>The <code>DATABASE_URL</code>, <code>DEFAULT_DOWNLOAD_PATH</code>, and <code>CLEAN_RSS_PATH</code> variables inside the container are set automatically by the compose file and do not normally need to be changed.</p>
+
+      <!-- Reverse proxy -->
+      <h2>Running behind a reverse proxy</h2>
+      <p>The container is configured to trust <code>X-Forwarded-*</code> headers, so it works out of the box behind nginx, Caddy, Traefik, or any other reverse proxy.</p>
+
+      <h3>Caddy example</h3>
+      <div class="code-card">
+        <div class="code-header">
+          <div class="code-dots"><span></span><span></span><span></span></div>
+          <span>Caddyfile</span>
+        </div>
+        <pre><span class="val">podcasts.example.com</span> {
+    <span class="key">reverse_proxy</span> localhost:8000
+}</pre>
+      </div>
+
+      <h3>nginx example</h3>
+      <div class="code-card">
+        <div class="code-header">
+          <div class="code-dots"><span></span><span></span><span></span></div>
+          <span>nginx.conf</span>
+        </div>
+        <pre><span class="key">server</span> {
+    <span class="key">listen</span> <span class="val">443 ssl</span>;
+    <span class="key">server_name</span> <span class="val">podcasts.example.com</span>;
+
+    <span class="key">location</span> / {
+        <span class="key">proxy_pass</span>         <span class="val">http://localhost:8000</span>;
+        <span class="key">proxy_set_header</span>   <span class="val">Host $host</span>;
+        <span class="key">proxy_set_header</span>   <span class="val">X-Real-IP $remote_addr</span>;
+        <span class="key">proxy_set_header</span>   <span class="val">X-Forwarded-For $proxy_add_x_forwarded_for</span>;
+        <span class="key">proxy_set_header</span>   <span class="val">X-Forwarded-Proto $scheme</span>;
+    }
+}</pre>
+      </div>
+
+      <!-- Data & backups -->
+      <h2>Data &amp; backups</h2>
+      <ul>
+        <li><strong>Database</strong> — <code>DATA_PATH/castcharm.db</code>. This single file contains all feeds, episode records, settings, and playback history. Copy it to back everything up.</li>
+        <li><strong>Audio files</strong> — stored in <code>DOWNLOAD_PATH/</code>, organised as <code>Podcast Name/YYYY/filename.mp3</code> by default.</li>
+      </ul>
+      <p>To restore: stop the container, replace the files, start again.</p>
+
+      <!-- Build from source -->
+      <h2>Build from source</h2>
+      <p>If you prefer to build the image locally rather than pulling from the registry:</p>
+
+      <div class="code-card">
+        <div class="code-header">
+          <div class="code-dots"><span></span><span></span><span></span></div>
+          <span>bash</span>
+        </div>
+        <pre><span class="cmd"><span class="cmd-kw">git</span> clone https://github.com/CastCharm/castcharm</span>
+<span class="cmd"><span class="cmd-kw">cd</span> castcharm</span>
+<span class="cmd"><span class="cmd-kw">docker</span> compose up -d --build</span></pre>
+      </div>
+
+      <!-- Updates -->
+      <h2>Updating</h2>
+      <div class="code-card">
+        <div class="code-header">
+          <div class="code-dots"><span></span><span></span><span></span></div>
+          <span>bash</span>
+        </div>
+        <pre><span class="comment"># Pull the latest image and restart</span>
+<span class="cmd"><span class="cmd-kw">docker</span> compose pull</span>
+<span class="cmd"><span class="cmd-kw">docker</span> compose up -d</span></pre>
+      </div>
+
+      <p>Database migrations run automatically on startup. No manual steps are required when upgrading.</p>
+
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <footer class="site-footer">
+    <span>© <span id="copy-year"></span> CastCharm</span>
+    <div class="footer-links">
+      <a href="index.html">Home</a>
+      <a href="android.html">Android</a>
+      <a href="privacy.html">Privacy Policy</a>
+      <a href="https://github.com/CastCharm/castcharm" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/CastCharm/castcharm/issues" target="_blank" rel="noopener">Issues</a>
+    </div>
+  </footer>
+  <script>
+    const start = 2026, now = new Date().getFullYear();
+    document.getElementById("copy-year").textContent = now > start ? start + "–" + now : start;
+
+    const hamburger = document.getElementById("hamburger");
+    const navLinks  = document.getElementById("nav-links");
+    hamburger.addEventListener("click", function () {
+      const open = navLinks.classList.toggle("open");
+      hamburger.classList.toggle("open", open);
+      hamburger.setAttribute("aria-expanded", open);
+    });
+    navLinks.querySelectorAll("a").forEach(function (a) {
+      a.addEventListener("click", function () {
+        navLinks.classList.remove("open");
+        hamburger.classList.remove("open");
+        hamburger.setAttribute("aria-expanded", "false");
+      });
+    });
+  </script>
+
+</body>
+</html>

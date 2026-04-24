@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CastCharm — Self-hosted podcast manager</title>
+  <meta name="description" content="CastCharm is a self-hosted podcast manager. Subscribe to RSS feeds, download episodes automatically, track playback, and manage your library — all from a single Docker container." />
+  <link rel="stylesheet" href="style.css" />
+  <link rel="icon" type="image/svg+xml" href="assets/icon.svg" />
+</head>
+<body>
+
+  <!-- Nav -->
+  <nav class="site-nav">
+    <a class="nav-logo" href="index.html">
+      <img src="assets/icon.svg" alt="CastCharm icon" />
+      <span class="nav-logo-text">CastCharm</span>
+    </a>
+    <div class="nav-links" id="nav-links">
+      <a class="nav-link active" href="index.html">Home</a>
+      <a class="nav-link" href="install.html">Install</a>
+      <a class="nav-link" href="android.html">Android</a>
+      <a class="nav-link" href="privacy.html">Privacy</a>
+      <a class="nav-link nav-link-mobile-only" href="https://github.com/CastCharm/castcharm" target="_blank" rel="noopener">GitHub ↗</a>
+    </div>
+    <button class="hamburger" id="hamburger" aria-label="Toggle menu" aria-expanded="false">
+      <span></span><span></span><span></span>
+    </button>
+    <div class="nav-right">
+      <a class="btn btn-ghost btn-sm" href="https://github.com/CastCharm/castcharm" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.477 2 12c0 4.418 2.865 8.166 6.839 9.489.5.092.682-.217.682-.482 0-.237-.009-.868-.013-1.703-2.782.604-3.369-1.342-3.369-1.342-.454-1.155-1.11-1.463-1.11-1.463-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0 1 12 6.836a9.59 9.59 0 0 1 2.504.337c1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.202 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.163 22 16.418 22 12c0-5.523-4.477-10-10-10z"/></svg>
+        GitHub
+      </a>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <section class="hero">
+    <img class="hero-icon" src="assets/icon.svg" alt="CastCharm" />
+    <h1 class="hero-title">CastCharm</h1>
+    <p class="hero-tagline">Self-hosted podcast manager</p>
+    <p class="hero-desc">
+      Subscribe to RSS feeds, download episodes automatically, track your listening,
+      and manage your entire library — all from a single Docker container running on your own server.
+    </p>
+    <div class="hero-actions">
+      <a class="btn btn-primary" href="install.html">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Installation Guide
+      </a>
+      <a class="btn btn-ghost" href="https://github.com/CastCharm/castcharm" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.477 2 12c0 4.418 2.865 8.166 6.839 9.489.5.092.682-.217.682-.482 0-.237-.009-.868-.013-1.703-2.782.604-3.369-1.342-3.369-1.342-.454-1.155-1.11-1.463-1.11-1.463-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0 1 12 6.836a9.59 9.59 0 0 1 2.504.337c1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.202 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.163 22 16.418 22 12c0-5.523-4.477-10-10-10z"/></svg>
+        View on GitHub
+      </a>
+    </div>
+  </section>
+
+  <hr class="section-divider" />
+
+  <!-- Features -->
+  <section class="section">
+    <p class="section-label">Features</p>
+    <h2 class="section-title">What CastCharm does</h2>
+    <p class="section-sub">A straightforward overview of what the app includes.</p>
+
+    <div class="features-grid">
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1" fill="currentColor"/></svg>
+        </div>
+        <h3 class="feature-title">Feed management</h3>
+        <p class="feature-desc">Subscribe by RSS URL, Apple Podcasts link, or local XML file. Change the source URL at any time without losing your download history or episode records.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        </div>
+        <h3 class="feature-title">Automatic downloads</h3>
+        <p class="feature-desc">New episodes can be downloaded automatically when a feed syncs. Configure auto-download globally or per feed, with optional time-window restrictions.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h18v18H3z" rx="2"/><polyline points="3 9 21 9"/><polyline points="9 21 9 9"/></svg>
+        </div>
+        <h3 class="feature-title">File organization</h3>
+        <p class="feature-desc">Downloads are saved with configurable filenames — date prefix, sequential episode number, and optional year subfolders. Settings can be overridden per feed.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+        </div>
+        <h3 class="feature-title">Import existing files</h3>
+        <p class="feature-desc">Bring in an existing podcast library from disk. CastCharm reads ID3 tags and matches audio files to their RSS entries, then renames them to match the configured format.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        </div>
+        <h3 class="feature-title">Built-in player</h3>
+        <p class="feature-desc">Stream any downloaded episode from the browser. Playback position is remembered across sessions, and episodes are marked played automatically based on a configurable threshold.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+        </div>
+        <h3 class="feature-title">ID3 tagging</h3>
+        <p class="feature-desc">Write RSS metadata — title, author, description, artwork — to audio files. Field mappings are configurable per feed, with per-episode overrides.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1" fill="currentColor"/><line x1="22" y1="2" x2="2" y2="22"/></svg>
+        </div>
+        <h3 class="feature-title">Clean RSS output</h3>
+        <p class="feature-desc">Generates a private RSS feed for each podcast pointing at your local files. Use it with any podcast app to listen from another device on your network.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+        </div>
+        <h3 class="feature-title">Stats &amp; search</h3>
+        <p class="feature-desc">Library-wide and per-feed statistics with charts — total downloads, storage used, listening rate, and more. Full-text search across all episode titles and descriptions.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+        </div>
+        <h3 class="feature-title">REST API</h3>
+        <p class="feature-desc">Every action available in the UI is also available via a documented REST API. Swagger UI is built in at <code>/api/docs</code>. Optionally enable password protection.</p>
+      </div>
+
+    </div>
+  </section>
+
+  <hr class="section-divider" />
+
+  <!-- Android -->
+  <section class="section">
+    <p class="section-label">Coming soon</p>
+    <h2 class="section-title">Android companion app</h2>
+    <p class="section-sub">A native Android app for your CastCharm library is in development.</p>
+
+    <div class="coming-soon-card">
+      <div class="coming-soon-icon">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M17.523 15.341a.5.5 0 1 1-1 0 .5.5 0 0 1 1 0m-10 0a.5.5 0 1 1-1 0 .5.5 0 0 1 1 0M2.5 8h19l-1.5 9.5a2 2 0 0 1-2 1.5H6a2 2 0 0 1-2-1.5zm4-2.5 1.5-2.5h8l1.5 2.5"/></svg>
+      </div>
+      <div class="coming-soon-body">
+        <span class="coming-soon-badge">Coming soon</span>
+        <h3 class="coming-soon-title">CastCharm for Android</h3>
+        <p class="coming-soon-desc">
+          A native Android app that connects to your self-hosted CastCharm instance.
+          Browse your library, stream or download episodes, and track playback —
+          all from your phone, with no third-party service in the middle.
+        </p>
+        <a class="coming-soon-link" href="android.html">
+          Learn more
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <hr class="section-divider" />
+
+  <!-- Quick start -->
+  <section class="section">
+    <p class="section-label">Quick start</p>
+    <h2 class="section-title">Up and running in three commands</h2>
+    <p class="section-sub">CastCharm ships as a single Docker container. No build step, no external database.</p>
+
+    <div class="code-card">
+      <div class="code-header">
+        <div class="code-dots"><span></span><span></span><span></span></div>
+        <span>bash</span>
+      </div>
+      <pre><span class="comment"># 1. Download the compose file</span>
+<span class="cmd"><span class="cmd-kw">curl</span> -O https://raw.githubusercontent.com/CastCharm/castcharm/main/docker-compose.yml</span>
+
+<span class="comment"># 2. Start</span>
+<span class="cmd"><span class="cmd-kw">docker</span> compose up -d</span>
+
+<span class="comment"># 3. Open the app</span>
+<span class="cmd"><span class="cmd-kw">open</span> http://localhost:8000</span></pre>
+    </div>
+
+    <p style="margin-top:24px;font-size:14px;color:var(--text-3)">
+      The setup wizard will guide you through initial configuration on first run.
+      See the <a href="install.html">Installation Guide</a> for volume paths, port changes, and reverse proxy configuration.
+    </p>
+  </section>
+
+  <!-- Footer -->
+  <footer class="site-footer">
+    <span>© <span id="copy-year"></span> CastCharm</span>
+    <div class="footer-links">
+      <a href="install.html">Install</a>
+      <a href="android.html">Android</a>
+      <a href="privacy.html">Privacy Policy</a>
+      <a href="https://github.com/CastCharm/castcharm" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/CastCharm/castcharm/issues" target="_blank" rel="noopener">Issues</a>
+    </div>
+  </footer>
+  <script>
+    const start = 2026, now = new Date().getFullYear();
+    document.getElementById("copy-year").textContent = now > start ? start + "–" + now : start;
+
+    const hamburger = document.getElementById("hamburger");
+    const navLinks  = document.getElementById("nav-links");
+    hamburger.addEventListener("click", function () {
+      const open = navLinks.classList.toggle("open");
+      hamburger.classList.toggle("open", open);
+      hamburger.setAttribute("aria-expanded", open);
+    });
+    navLinks.querySelectorAll("a").forEach(function (a) {
+      a.addEventListener("click", function () {
+        navLinks.classList.remove("open");
+        hamburger.classList.remove("open");
+        hamburger.setAttribute("aria-expanded", "false");
+      });
+    });
+  </script>
+
+</body>
+</html>
