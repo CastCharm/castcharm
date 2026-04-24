@@ -2,8 +2,10 @@
 
 A self-hosted podcast manager with a clean web UI. Subscribe to RSS feeds, auto-download episodes, track playback, and manage your library — all from a single Docker container.
 
-![License](https://img.shields.io/github/license/ryanboyd/castcharm)
-![Docker Image](https://img.shields.io/github/actions/workflow/status/ryanboyd/castcharm/docker.yml?label=docker%20build)
+**[castcharm.org](https://www.castcharm.org)** · [Installation guide](https://www.castcharm.org/install.html) · [Android app](https://www.castcharm.org/android.html)
+
+![License](https://img.shields.io/github/license/CastCharm/castcharm)
+![Docker Image](https://img.shields.io/github/actions/workflow/status/CastCharm/castcharm/docker.yml?label=docker%20build)
 
 Disclosure: GenAI is being used during development.
 
@@ -28,7 +30,7 @@ Disclosure: GenAI is being used during development.
 
 ```bash
 # 1. Download the compose file
-curl -O https://raw.githubusercontent.com/ryanboyd/castcharm/main/docker-compose.yml
+curl -O https://raw.githubusercontent.com/CastCharm/castcharm/main/docker-compose.yml
 
 # 2. (Optional) configure paths and port
 cp .env.example .env
@@ -67,7 +69,7 @@ The default `CMD` includes `--proxy-headers` so `X-Forwarded-*` headers from ngi
 ```yaml
 services:
   castcharm:
-    image: ghcr.io/ryanboyd/castcharm:latest
+    image: ghcr.io/castcharm/castcharm:latest
     container_name: castcharm
     ports:
       - "${PORT:-8000}:8000"
@@ -84,7 +86,7 @@ services:
 ### Build from source
 
 ```bash
-git clone https://github.com/ryanboyd/castcharm
+git clone https://github.com/CastCharm/castcharm
 cd castcharm
 docker compose up -d --build
 ```

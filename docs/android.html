@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Android App — CastCharm</title>
+  <meta name="description" content="CastCharm for Android connects to your self-hosted CastCharm server for podcast streaming, downloads, offline playback, and Android Auto support." />
+  <link rel="stylesheet" href="style.css" />
+  <link rel="icon" type="image/svg+xml" href="assets/icon.svg" />
+</head>
+<body>
+
+  <!-- Nav -->
+  <nav class="site-nav">
+    <a class="nav-logo" href="index.html">
+      <img src="assets/icon.svg" alt="CastCharm icon" />
+      <span class="nav-logo-text">CastCharm</span>
+    </a>
+    <div class="nav-links" id="nav-links">
+      <a class="nav-link" href="index.html">Home</a>
+      <a class="nav-link" href="install.html">Install</a>
+      <a class="nav-link active" href="android.html">Android</a>
+      <a class="nav-link" href="privacy.html">Privacy</a>
+      <a class="nav-link nav-link-mobile-only" href="https://github.com/CastCharm/castcharm" target="_blank" rel="noopener">GitHub ↗</a>
+    </div>
+    <button class="hamburger" id="hamburger" aria-label="Toggle menu" aria-expanded="false">
+      <span></span><span></span><span></span>
+    </button>
+    <div class="nav-right">
+      <a class="btn btn-ghost btn-sm" href="https://github.com/CastCharm/castcharm" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.477 2 12c0 4.418 2.865 8.166 6.839 9.489.5.092.682-.217.682-.482 0-.237-.009-.868-.013-1.703-2.782.604-3.369-1.342-3.369-1.342-.454-1.155-1.11-1.463-1.11-1.463-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0 1 12 6.836a9.59 9.59 0 0 1 2.504.337c1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.202 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.163 22 16.418 22 12c0-5.523-4.477-10-10-10z"/></svg>
+        GitHub
+      </a>
+    </div>
+  </nav>
+
+  <div class="content-wrap">
+    <div class="content-page">
+
+      <h1>Android App</h1>
+
+      <p>
+        CastCharm for Android is a mobile app for listening to podcasts from a
+        self-hosted CastCharm server. It connects to your own server and uses the
+        podcast feeds, episodes, playback progress, and downloaded files associated
+        with that server.
+      </p>
+
+      <h2>What the app does</h2>
+      <ul>
+        <li>Connects to a CastCharm server using the server address you provide</li>
+        <li>Uses the server's existing login when authentication is enabled</li>
+        <li>Shows your podcasts, recent episodes, downloaded episodes, and episodes in progress</li>
+        <li>Streams episodes from your CastCharm server</li>
+        <li>Downloads episodes to the device for offline listening</li>
+        <li>Saves playback position and played status back to your server when online</li>
+        <li>Keeps local playback changes for later sync when the server is unavailable</li>
+      </ul>
+
+      <h2>Playback</h2>
+      <p>
+        The app includes an audio player for podcast episodes. It supports play and
+        pause, 30-second skip back and forward controls, playback speed options from
+        0.75× to 2.0×, and automatic progress tracking. Episodes can be marked as
+        played when playback reaches the end.
+      </p>
+
+      <h2>Downloads and offline use</h2>
+      <p>
+        Downloaded episodes are stored on the Android device. In settings, you can
+        view device storage, set a CastCharm download quota, choose how many episode
+        downloads can run at once, and clear downloaded episodes. If your server
+        cannot be reached, the app can continue in offline mode with downloaded
+        content.
+      </p>
+
+      <h2>Android Auto</h2>
+      <p>
+        CastCharm includes Android Auto media support. In Android Auto, the app can
+        show sections for downloads, podcasts, recent episodes, and episodes in
+        progress when online. In offline mode, Android Auto shows downloaded episodes.
+      </p>
+
+      <h2>Settings</h2>
+      <ul>
+        <li>Change the connected server</li>
+        <li>Choose system, light, or dark theme</li>
+        <li>Adjust the app font size</li>
+        <li>Set the download storage quota</li>
+        <li>Set the number of concurrent downloads</li>
+        <li>Clear downloaded episodes from the device</li>
+      </ul>
+
+      <h2>What the app does not do</h2>
+      <ul>
+        <li>It does not provide a separate podcast directory</li>
+        <li>It does not create a CastCharm cloud account</li>
+        <li>It does not sync through a CastCharm-hosted cloud service</li>
+        <li>It does not replace the need for a CastCharm server</li>
+      </ul>
+
+      <h2>Privacy and data</h2>
+      <p>
+        The app is designed to work with your own CastCharm server. Podcast data,
+        downloaded episodes, playback progress, and played status are handled between
+        the Android app, the local device, and the CastCharm server you configure.
+        No separate CastCharm cloud service is required.
+      </p>
+
+      <h2>Project</h2>
+      <p>
+        CastCharm is developed in the open. Source code, issues, and project updates
+        are available on GitHub.
+      </p>
+      <p>
+        <a class="btn btn-ghost btn-sm" href="https://github.com/CastCharm/castcharm" target="_blank" rel="noopener" style="display:inline-flex">
+          <svg viewBox="0 0 24 24" fill="currentColor" style="width:15px;height:15px"><path d="M12 2C6.477 2 2 6.477 2 12c0 4.418 2.865 8.166 6.839 9.489.5.092.682-.217.682-.482 0-.237-.009-.868-.013-1.703-2.782.604-3.369-1.342-3.369-1.342-.454-1.155-1.11-1.463-1.11-1.463-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0 1 12 6.836a9.59 9.59 0 0 1 2.504.337c1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.202 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.163 22 16.418 22 12c0-5.523-4.477-10-10-10z"/></svg>
+          View on GitHub
+        </a>
+      </p>
+
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <footer class="site-footer">
+    <span>© <span id="copy-year"></span> CastCharm</span>
+    <div class="footer-links">
+      <a href="index.html">Home</a>
+      <a href="install.html">Install</a>
+      <a href="privacy.html">Privacy Policy</a>
+      <a href="https://github.com/CastCharm/castcharm" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/CastCharm/castcharm/issues" target="_blank" rel="noopener">Issues</a>
+    </div>
+  </footer>
+
+  <script>
+    const start = 2026, now = new Date().getFullYear();
+    document.getElementById("copy-year").textContent = now > start ? start + "–" + now : start;
+
+    const hamburger = document.getElementById("hamburger");
+    const navLinks  = document.getElementById("nav-links");
+    hamburger.addEventListener("click", function () {
+      const open = navLinks.classList.toggle("open");
+      hamburger.classList.toggle("open", open);
+      hamburger.setAttribute("aria-expanded", open);
+    });
+    navLinks.querySelectorAll("a").forEach(function (a) {
+      a.addEventListener("click", function () {
+        navLinks.classList.remove("open");
+        hamburger.classList.remove("open");
+        hamburger.setAttribute("aria-expanded", "false");
+      });
+    });
+  </script>
+
+</body>
+</html>
