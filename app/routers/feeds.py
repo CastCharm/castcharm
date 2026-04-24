@@ -301,14 +301,17 @@ def get_feed(feed_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/{feed_id}", response_model=FeedOut)
-def update_feed(feed_id: int, body: FeedUpdate, db: Session = Depends(get_db)):
+def update_feed(feed_id: int, body: FeedUpdate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     feed = db.query(Feed).filter(Feed.id == feed_id).first()
     if not feed:
         raise HTTPException(status_code=404, detail="Feed not found")
 
     updates = body.model_dump(exclude_unset=True)
+    url_changed = False
     if "url" in updates and updates["url"]:
         updates["url"] = resolve_feed_url(updates["url"])
+        if updates["url"] != feed.url:
+            url_changed = True
 
     # Handle title rename: pin podcast_group to preserve folder path
     title_changed = False
@@ -325,6 +328,11 @@ def update_feed(feed_id: int, body: FeedUpdate, db: Session = Depends(get_db)):
 
     for field, value in updates.items():
         setattr(feed, field, value)
+
+    if url_changed:
+        # Treat the new URL as a fresh feed: full sync (no lookback limit), no auto-download.
+        feed.initial_sync_complete = False
+        feed.download_all_on_first_sync = False
 
     feed.updated_at = datetime.utcnow()
     db.commit()
@@ -361,6 +369,12 @@ def update_feed(feed_id: int, body: FeedUpdate, db: Session = Depends(get_db)):
             write_feed_xml(feed, db, folder)
         except Exception:
             pass
+
+    # Kick off an immediate sync when the URL changed so the new feed is populated right away.
+    if url_changed:
+        from app.activity import mark_sync_queued
+        mark_sync_queued(feed_id)
+        background_tasks.add_task(_bg_sync, feed_id)
 
     return _feed_out(feed, db)
 

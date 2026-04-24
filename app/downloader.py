@@ -179,10 +179,19 @@ def _ensure_workers() -> None:
 
 
 
-def enqueue_download(episode_id: int) -> None:  # noqa: ARG001
+def enqueue_download(episode_id: int) -> None:
     """Wake the download workers.  They will claim the next episode from the DB in
     priority order (newest published_at first), so submission order no longer
-    determines download order."""
+    determines download order.
+
+    Also clears any stale cancel signal for this ID.  _cancelled_ids is a
+    process-lifetime set — cancel endpoints that reset queued-state episodes
+    straight to pending never go through the worker, so their IDs accumulate
+    in the set forever.  After a feed delete + re-add, SQLite's ROWID reuse
+    can hand those IDs to completely unrelated new episodes; without this
+    discard, their first queue attempt would be instantly cancelled.
+    """
+    _cancelled_ids.discard(episode_id)
     _ensure_workers()
     _wake_event.set()
 
