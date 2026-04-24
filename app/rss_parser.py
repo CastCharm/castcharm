@@ -4,8 +4,9 @@ import hashlib
 import json
 import logging
 import re
+import unicodedata
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Optional
 
 log = logging.getLogger(__name__)
@@ -14,6 +15,21 @@ import feedparser
 
 from app.models import Episode, Feed
 from sqlalchemy.orm import Session
+
+
+def _normalize_title(title: Optional[str]) -> str:
+    """Case/punctuation-insensitive normalisation for fuzzy title matching.
+
+    Used by the sync-time dedup so that when a feed's URL points at a different
+    source, slight formatting differences between the two feeds (colon vs dash,
+    smart quotes, extra whitespace) don't produce phantom "pending" duplicates
+    of episodes we already have downloaded.
+    """
+    if not title:
+        return ""
+    title = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode()
+    title = re.sub(r"[^a-z0-9 ]", " ", title.lower())
+    return re.sub(r"\s+", " ", title).strip()
 
 
 def _parse_date(val) -> Optional[datetime]:
@@ -398,7 +414,10 @@ def sync_feed_episodes(
         ).all()
     ]
 
-    # Build enclosure URL map and title+date map from sibling feeds in the same group
+    # Build enclosure URL map and title+date map from sibling feeds in the same group.
+    # Title keys go through _normalize_title so fuzzy variations ("Ep 1: Foo" vs
+    # "Ep. 1 - Foo") match.  Date keys are looked up with ±1 day tolerance further
+    # down to absorb timezone-parse slop between sources.
     existing_url_map: dict[str, Episode] = {}
     existing_title_date_map: dict[tuple, Episode] = {}
     if sibling_ids:
@@ -407,8 +426,9 @@ def sync_feed_episodes(
         ).all():
             if ep.enclosure_url:
                 existing_url_map[ep.enclosure_url] = ep
-            if ep.title and ep.published_at:
-                key = (ep.title.strip().lower(), ep.published_at.date())
+            norm = _normalize_title(ep.title)
+            if norm and ep.published_at:
+                key = (norm, ep.published_at.date())
                 existing_title_date_map.setdefault(key, ep)
 
     # Build same-feed maps for dedup and xml_import collision resolution.
@@ -419,13 +439,34 @@ def sync_feed_episodes(
     for ep in db.query(Episode).filter(Episode.feed_id == feed.id).all():
         if ep.enclosure_url:
             same_feed_url_map[ep.enclosure_url] = ep
-        if ep.title and ep.published_at:
-            key = (ep.title.strip().lower(), ep.published_at.date())
+        norm = _normalize_title(ep.title)
+        if norm and ep.published_at:
+            key = (norm, ep.published_at.date())
             same_feed_title_date_map.setdefault(key, ep)
         if ep.guid:
             same_feed_guid_map[ep.guid] = ep
-        if ep.title:
-            same_feed_title_map.setdefault(ep.title.strip().lower(), ep)
+        if norm:
+            same_feed_title_map.setdefault(norm, ep)
+
+    def _lookup_by_title_date(
+        tmap: dict[tuple, "Episode"],
+        t: Optional[str],
+        p: Optional[datetime],
+    ) -> Optional["Episode"]:
+        """Fuzzy title+date lookup: normalised title must match; date within ±1 day.
+
+        The ±1 day window lets us dedup when two sources of the same feed disagree
+        on publish date by a few hours across a midnight boundary.
+        """
+        norm = _normalize_title(t)
+        if not norm or p is None:
+            return None
+        d = p.date()
+        for delta in (0, -1, 1):
+            match = tmap.get((norm, d + timedelta(days=delta)))
+            if match is not None:
+                return match
+        return None
 
     new_pending_episodes: list[Episode] = []
     skipped_count = 0
@@ -521,8 +562,8 @@ def sync_feed_episodes(
             # this RSS entry by enclosure URL or title+date, promote it to the real
             # guid instead of creating a duplicate.
             same_match = same_feed_url_map.get(enc_url) if enc_url else None
-            if same_match is None and title and pub:
-                same_match = same_feed_title_date_map.get((title.strip().lower(), pub.date()))
+            if same_match is None:
+                same_match = _lookup_by_title_date(same_feed_title_date_map, title, pub)
             if same_match is not None and same_match.guid != guid:
                 old_guid = same_match.guid
                 same_match.guid = guid
@@ -536,8 +577,8 @@ def sync_feed_episodes(
 
             # Cross-feed dedup: URL match takes priority, then title+date match
             duplicate = existing_url_map.get(enc_url) if enc_url else None
-            if duplicate is None and title and pub:
-                duplicate = existing_title_date_map.get((title.strip().lower(), pub.date()))
+            if duplicate is None:
+                duplicate = _lookup_by_title_date(existing_title_date_map, title, pub)
 
             if duplicate is not None:
                 if duplicate.status == "downloaded" and duplicate.file_path:
