@@ -7,8 +7,6 @@ A self-hosted podcast manager with a clean web UI. Subscribe to RSS feeds, auto-
 ![License](https://img.shields.io/github/license/CastCharm/castcharm)
 ![Docker Image](https://img.shields.io/github/actions/workflow/status/CastCharm/castcharm/docker.yml?label=docker%20build)
 
-Disclosure: GenAI is being used during development.
-
 ---
 
 ## Features
@@ -121,3 +119,7 @@ The frontend is plain HTML/CSS/JS — no build step required.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## AI Disclosure
+
+Generative AI is being used for some aspects of development. All generated code is human-reviewed, human-modified where improvements can be made, and tested by humans.
