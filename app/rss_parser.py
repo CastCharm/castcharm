@@ -117,6 +117,8 @@ def resolve_feed_url(url: str) -> str:
 
 def fetch_feed_metadata(url: str) -> dict[str, Any]:
     """Fetch and parse a feed URL, returning top-level metadata only."""
+    from app.utils import validate_http_url
+    validate_http_url(url)
     parsed = feedparser.parse(url)
     if parsed.get("bozo") and not parsed.get("entries"):
         exc = parsed.get("bozo_exception")
@@ -357,6 +359,10 @@ def sync_feed_episodes(
     Returns IDs of newly added episodes whose status is 'pending'.
     """
     source = parse_url or feed.url
+    if not parse_url:
+        # source is a live network URL supplied by the user — enforce http(s) only
+        from app.utils import validate_http_url
+        validate_http_url(source)
     parsed = feedparser.parse(source)
     if parsed.get("bozo") and not parsed.get("entries"):
         exc = parsed.get("bozo_exception")

@@ -203,7 +203,6 @@ class EpisodeOut(BaseModel):
     author: Optional[str]
     link: Optional[str]
     status: str
-    file_path: Optional[str]
     file_size: Optional[int]
     download_progress: int
     download_date: Optional[datetime]

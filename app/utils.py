@@ -1,9 +1,37 @@
 """Shared utility helpers used across multiple modules."""
+import os
 import re
+from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 
 from app.models import Feed
+
+# Directories that the app must never read from or write to on behalf of a user request.
+_SENSITIVE_PATH_PREFIXES = ("/etc", "/proc", "/sys", "/root", "/boot", "/dev", "/run")
+
+
+def validate_http_url(url: str) -> None:
+    """Raise ValueError if url is not a plain http(s) URL.
+
+    Prevents SSRF via file://, gopher://, ftp://, and other schemes that
+    feedparser and httpx would otherwise happily follow.
+    """
+    scheme = urlparse(url).scheme
+    if scheme not in ("http", "https"):
+        raise ValueError(f"URL scheme '{scheme}' is not permitted; only http and https are allowed")
+
+
+def assert_safe_path(path: str) -> str:
+    """Resolve symlinks and raise ValueError for paths inside sensitive system directories.
+
+    Returns the resolved real path so callers can use it directly.
+    """
+    real = os.path.realpath(path)
+    for prefix in _SENSITIVE_PATH_PREFIXES:
+        if real == prefix or real.startswith(prefix + os.sep):
+            raise ValueError(f"Access to '{prefix}' is not permitted")
+    return real
 
 
 def sanitize_filename(name: str) -> str:

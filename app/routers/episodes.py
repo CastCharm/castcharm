@@ -94,6 +94,20 @@ def _ep_out(ep: Episode) -> EpisodeOut:
     return out
 
 
+def _assert_file_in_base(file_path: str, db: Session) -> None:
+    """Raise 403 if file_path escapes the configured download base directory.
+
+    Defense-in-depth: even if a stale DB row somehow contains a path outside
+    the managed folder, we refuse to serve it.
+    """
+    from app.models import GlobalSettings
+    gs = db.query(GlobalSettings).first()
+    base = os.path.realpath((gs.download_path if gs else None) or "/downloads")
+    real = os.path.realpath(file_path)
+    if not (real == base or real.startswith(base + os.sep)):
+        raise HTTPException(status_code=403, detail="File is outside the managed download directory")
+
+
 @router.get("/{episode_id}/file")
 def serve_episode_file(episode_id: int, db: Session = Depends(get_db)):
     """Stream the downloaded audio file as a browser attachment download."""
@@ -103,6 +117,7 @@ def serve_episode_file(episode_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Episode not found")
     if not ep.file_path or not os.path.exists(ep.file_path):
         raise HTTPException(status_code=404, detail="File not found on disk")
+    _assert_file_in_base(ep.file_path, db)
     filename = os.path.basename(ep.file_path)
     return FileResponse(
         path=ep.file_path,
@@ -120,6 +135,7 @@ def stream_episode(episode_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Episode not found")
     if not ep.file_path or not os.path.exists(ep.file_path):
         raise HTTPException(status_code=404, detail="File not found on disk")
+    _assert_file_in_base(ep.file_path, db)
     mime = ep.enclosure_type or "audio/mpeg"
     return FileResponse(
         path=ep.file_path,
