@@ -880,9 +880,14 @@ def import_files(
     if existing and existing.get("status") == "running":
         raise HTTPException(status_code=409, detail="Import already running for this feed")
 
+    from app.utils import assert_safe_path
     directory = body.directory.strip()
     if not os.path.isdir(directory):
         raise HTTPException(status_code=400, detail="Directory not found")
+    try:
+        directory = assert_safe_path(directory)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Access to this directory is not permitted")
 
     # Save settings as feed defaults before the background task reads them
     if body.save_as_defaults:
@@ -949,9 +954,14 @@ def import_preview(feed_id: int, body: ImportPreviewRequest, db: Session = Depen
     if not feed:
         raise HTTPException(status_code=404, detail="Feed not found")
 
+    from app.utils import assert_safe_path
     directory = body.directory.strip()
     if not os.path.isdir(directory):
         raise HTTPException(status_code=400, detail="Directory not found on server")
+    try:
+        directory = assert_safe_path(directory)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Access to this directory is not permitted")
 
     return preview_import_directory(feed_id, directory, db,
                                     filename_format=body.filename_format)
@@ -1265,7 +1275,10 @@ async def import_feed_xml(
     if not feed:
         raise HTTPException(status_code=404, detail="Feed not found")
 
-    content = await file.read()
+    _XML_MAX_BYTES = 50 * 1024 * 1024
+    content = await file.read(_XML_MAX_BYTES + 1)
+    if len(content) > _XML_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="XML file too large (limit: 50 MB)")
     tmp_path = None
     try:
         with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as tmp:
@@ -1316,9 +1329,12 @@ async def preview_feed_xml(
     if not feed:
         raise HTTPException(status_code=404, detail="Feed not found")
 
-    content = await file.read()
+    _XML_MAX_BYTES = 50 * 1024 * 1024
+    content = await file.read(_XML_MAX_BYTES + 1)
     if not content:
         raise HTTPException(status_code=400, detail="Empty file")
+    if len(content) > _XML_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="XML file too large (limit: 50 MB)")
 
     tmp = tempfile.NamedTemporaryFile(suffix=".xml", delete=False)
     try:
@@ -1435,9 +1451,12 @@ async def create_feed_from_xml(
     import uuid as _uuid
     import feedparser
 
-    content = await file.read()
+    _XML_MAX_BYTES = 50 * 1024 * 1024
+    content = await file.read(_XML_MAX_BYTES + 1)
     if not content:
         raise HTTPException(status_code=400, detail="Empty file")
+    if len(content) > _XML_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="XML file too large (limit: 50 MB)")
 
     tmp_path = None
     try:

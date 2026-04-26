@@ -1122,11 +1122,25 @@ def import_staged(feed_id: int, items: list, db: Session,
     pending: list[tuple] = []  # (episode, audio_path) for pass 2
 
     # ── Pass 1: create/match all episodes (no file copies yet) ──
+    from app.utils import assert_safe_path
     for item in to_process:
         audio_path = item["path"]
         episode_id = item.get("episode_id")
 
         try:
+            # Reject paths in sensitive system directories and non-audio extensions
+            try:
+                audio_path = assert_safe_path(audio_path)
+            except ValueError as e:
+                log.warning("Staged import: rejected path %s: %s", audio_path, e)
+                errors += 1
+                continue
+            ext = os.path.splitext(audio_path)[1].lower()
+            if ext not in AUDIO_EXTENSIONS:
+                log.warning("Staged import: rejected non-audio file: %s", audio_path)
+                errors += 1
+                continue
+
             if not os.path.exists(audio_path):
                 log.warning("Staged import: file not found: %s", audio_path)
                 errors += 1
@@ -1256,10 +1270,13 @@ def import_staged(feed_id: int, items: list, db: Session,
     for ep, audio_path in pending:
         _import_jobs[feed_id]["processed"] += 1
         try:
-            final_path = audio_path
-            try:
-                target = _build_target_path(ep, feed, audio_path, db)
-                if os.path.normpath(target) != os.path.normpath(audio_path) and not os.path.exists(target):
+            target = _build_target_path(ep, feed, audio_path, db)
+            if os.path.normpath(target) != os.path.normpath(audio_path):
+                # Target is in the managed folder — copy the file there.
+                # If the copy fails, do not fall back to the source path:
+                # linking to an arbitrary source path would allow unmanaged
+                # files (including sensitive system files) to be served.
+                if not os.path.exists(target):
                     os.makedirs(os.path.dirname(target), exist_ok=True)
                     shutil.copy2(audio_path, target)
                     xml_src = audio_path + ".xml"
@@ -1268,9 +1285,10 @@ def import_staged(feed_id: int, items: list, db: Session,
                             shutil.copy2(xml_src, target + ".xml")
                         except OSError:
                             pass
-                    final_path = target
-            except Exception as cp_err:
-                log.warning("Copy to managed folder failed for %s: %s (linking in-place)", audio_path, cp_err)
+                final_path = target
+            else:
+                # Source is already at the target path — no copy needed.
+                final_path = audio_path
 
             ep.status            = "downloaded"
             ep.file_path         = final_path

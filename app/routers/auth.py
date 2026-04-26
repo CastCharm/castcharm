@@ -28,6 +28,19 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["auth"])
 
+# IPs from which X-Forwarded-For is trusted (loopback = same-host reverse proxy)
+_TRUSTED_PROXY_IPS = frozenset({"127.0.0.1", "::1"})
+
+
+def _get_client_ip(request: Request) -> str:
+    """Return the real client IP, honouring X-Forwarded-For only from trusted proxies."""
+    direct_ip = request.client.host if request.client else "unknown"
+    if direct_ip in _TRUSTED_PROXY_IPS:
+        forwarded_for = request.headers.get("X-Forwarded-For", "")
+        if forwarded_for:
+            return forwarded_for.split(",")[0].strip()
+    return direct_ip
+
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
 
@@ -109,7 +122,7 @@ def login(
     response: Response,
     db: Session = Depends(get_db),
 ):
-    ip = request.client.host if request.client else "unknown"
+    ip = _get_client_ip(request)
 
     if not check_rate_limit(ip):
         raise HTTPException(status_code=429, detail="Too many login attempts. Please wait a few minutes.")
@@ -225,6 +238,9 @@ def complete_setup(
     gs = db.query(GlobalSettings).first()
     if not gs:
         raise HTTPException(status_code=404, detail="Settings not found")
+
+    if gs.setup_complete:
+        raise HTTPException(status_code=403, detail="Setup has already been completed")
 
     if body.enable_auth:
         if not body.username or not body.password:

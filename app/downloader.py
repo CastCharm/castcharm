@@ -378,7 +378,11 @@ AUDIO_EXTENSIONS = {".mp3", ".m4a", ".aac", ".ogg", ".flac", ".wav", ".mp4", ".o
 
 def _download_image(url: str, dest_path: str) -> None:
     """Download an image from *url* to *dest_path*. Skips if file already exists."""
+    from urllib.parse import urlparse
     if not url or os.path.exists(dest_path):
+        return
+    if urlparse(url).scheme not in ("http", "https"):
+        log.warning("Skipping image download with non-http(s) URL: %s", url)
         return
     try:
         with httpx.Client(

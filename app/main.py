@@ -314,7 +314,12 @@ def get_status():
 def browse_dirs(path: str = Query(default="/")):
     """List immediate subdirectories of a server-side path (for the setup folder picker)."""
     import os
+    from app.utils import assert_safe_path
     path = os.path.normpath(path)
+    try:
+        path = assert_safe_path(path)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Access to this directory is not permitted")
     if not os.path.isdir(path):
         raise HTTPException(status_code=404, detail="Directory not found")
     entries = []
