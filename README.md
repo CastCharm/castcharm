@@ -6,7 +6,9 @@ A self-hosted podcast manager with a clean web UI. Subscribe to RSS feeds, auto-
 
 ![License](https://img.shields.io/github/license/CastCharm/castcharm?cacheSeconds=3600)
 ![Docker Image](https://img.shields.io/github/actions/workflow/status/CastCharm/castcharm/docker.yml?label=docker%20build)
-
+[![Latest Release](https://img.shields.io/github/v/release/CastCharm/castcharm?label=release)](https://github.com/CastCharm/castcharm/releases)
+[![Docker Pulls](https://img.shields.io/docker/pulls/castcharm/castcharm?label=docker%20pulls)](https://hub.docker.com/r/castcharm/castcharm)
+[![Issues](https://img.shields.io/github/issues/CastCharm/castcharm)](https://github.com/CastCharm/castcharm/issues)
 ---
 
 ## Features
