@@ -143,6 +143,24 @@ const API = {
   getSuggestions: () => API.get("/api/episodes/suggestions"),
   getActiveProgress: () => API.get("/api/episodes/active-progress"),
 
+  // ── Playlists ─────────────────────────────────────────────────
+  getPlaylists:          ()       => API.get("/api/playlists"),
+  createPlaylist:        (body)   => API.post("/api/playlists", body),
+  updatePlaylist:        (id, b)  => API.put(`/api/playlists/${id}`, b),
+  deletePlaylist:        (id)     => API.delete(`/api/playlists/${id}`),
+  getPlaylistEpisodes:   (id)     => API.get(`/api/playlists/${id}/episodes`),
+  addToPlaylist:         (id, ep_id) => API.post(`/api/playlists/${id}/episodes`, { episode_id: ep_id }),
+  removeFromPlaylist:    (id, ep_id) => API.delete(`/api/playlists/${id}/episodes/${ep_id}`),
+  reorderPlaylist:       (id, ep_ids) => API.put(`/api/playlists/${id}/episodes/reorder`, { episode_ids: ep_ids }),
+  getEpisodePlaylists:   (episode_id) => API.get(`/api/playlists/episode-memberships?episode_id=${episode_id}`),
+  getFeedPlaylistMemberships: (feed_id) => API.get(`/api/playlists/feed-memberships?feed_id=${feed_id}`),
+
+  // ── Player state ──────────────────────────────────────────────
+  getPlayerState:  ()     => API.get("/api/player/state"),
+  playerPlay:      (body) => API.post("/api/player/play", body),
+  playerNext:      ()     => API.post("/api/player/next"),
+  playerPrev:      ()     => API.post("/api/player/prev"),
+
   // ── Auth ─────────────────────────────────────────────────────
   getAuthStatus: () => API.get("/api/auth/status"),
   login: async (username, password) => {

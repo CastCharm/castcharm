@@ -234,11 +234,15 @@ app.add_middleware(AuthMiddleware)
 # API routers
 from app.routers import feeds, episodes, settings as settings_router, stats as stats_router  # noqa: E402
 from app.routers.auth import router as auth_router  # noqa: E402
+from app.routers.playlists import router as playlists_router  # noqa: E402
+from app.routers.player import router as player_router  # noqa: E402
 app.include_router(auth_router)
 app.include_router(feeds.router)
 app.include_router(episodes.router)
 app.include_router(settings_router.router)
 app.include_router(stats_router.router)
+app.include_router(playlists_router)
+app.include_router(player_router)
 
 
 @app.get("/api/status", response_model=StatusOut, tags=["system"])

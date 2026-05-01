@@ -62,20 +62,38 @@ window.toggleEpPlayed = async function (epId) {
   } catch (e) { Toast.error(e.message); }
 };
 
-// Called by the player when an episode ends — play the next downloaded, unplayed episode
-window._autoPlayNext = function (currentEpId) {
-  const rows = [...document.querySelectorAll("#episode-list .episode-item")];
-  const currentIdx = rows.findIndex((r) => r.id === `ep-${currentEpId}`);
-  if (currentIdx === -1) return;
-  for (let i = currentIdx + 1; i < rows.length; i++) {
-    const r = rows[i];
-    if (r.dataset.status === "downloaded" && !r.dataset.played) {
-      const nextId = Number(r.id.replace("ep-", ""));
-      if (nextId) window.playEpisode(nextId);
+// Called by the player when an episode ends (triggered by the audio 'ended' event,
+// NOT by the played-status write — auto-advance fires only on actual completion).
+window._autoPlayNext = async function (currentEpId) {
+  try {
+    const state = await API.playerNext();
+    if (state.current_episode && state.current_episode.status === "downloaded") {
+      window.playEpisode(state.current_episode.id);
       return;
+    }
+  } catch (_) {
+    // No server context set — fall back to DOM-based next within current feed view
+    const rows = [...document.querySelectorAll("#episode-list .episode-item")];
+    const currentIdx = rows.findIndex((r) => r.id === `ep-${currentEpId}`);
+    if (currentIdx === -1) return;
+    for (let i = currentIdx + 1; i < rows.length; i++) {
+      const r = rows[i];
+      if (r.dataset.status === "downloaded" && !r.dataset.played) {
+        const nextId = Number(r.id.replace("ep-", ""));
+        if (nextId) window.playEpisode(nextId);
+        return;
+      }
     }
   }
 };
+
+function _applyPlaylistMemberStates(memberSet) {
+  document.querySelectorAll('[data-action="add-to-playlist"]').forEach((btn) => {
+    const epId = Number(btn.dataset.epId);
+    btn.classList.toggle("btn-primary", memberSet.has(epId));
+    btn.classList.toggle("btn-ghost", !memberSet.has(epId));
+  });
+}
 
 // ============================================================
 // Feed detail view
@@ -425,6 +443,10 @@ async function viewFeedDetail(feedId) {
           </div>
           ${feed.description ? `<div class="feed-header-desc">${_sanitizeNotes(feed.description)}</div>` : ""}
           <div class="feed-header-actions">
+            <button class="btn btn-primary btn-sm" id="btn-play-feed">
+              ${svg('<polygon points="5 3 19 12 5 21 5 3"/>')}
+              Play Feed
+            </button>
             <button class="btn btn-primary btn-sm" id="btn-sync-feed">
               ${svg('<polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>')}
               Sync Feed
@@ -813,6 +835,17 @@ async function viewFeedDetail(feedId) {
 
   // Wire up buttons
   window._onSyncIdle = _refreshFeedStats;
+
+  document.getElementById("btn-play-feed").addEventListener("click", async () => {
+    try {
+      const state = await API.playerPlay({ context_type: "feed", context_id: id, context_filter: "unplayed" });
+      if (state.current_episode) {
+        window.playEpisode(state.current_episode.id);
+      } else {
+        Toast.info("No unplayed downloaded episodes to play");
+      }
+    } catch (e) { Toast.error(e.message); }
+  });
 
   document.getElementById("btn-sync-feed").addEventListener("click", async () => {
     try {
@@ -1462,6 +1495,12 @@ async function viewFeedDetail(feedId) {
   // a full page reload when a new import is started from the Import Files dialog.
   _pollImportBanner(id);
 
+  // Initialize "+" button states based on playlist membership
+  API.getFeedPlaylistMemberships(id).then(({ episode_ids }) => {
+    window._epState.playlistMembers = new Set(episode_ids);
+    _applyPlaylistMemberStates(window._epState.playlistMembers);
+  }).catch(() => {});
+
   // Jump to a specific episode if requested (e.g. from dashboard)
   if (window._pendingEpScroll) {
     const targetId = window._pendingEpScroll;
@@ -1492,6 +1531,7 @@ async function loadMoreEpisodes() {
       }
     }
     window._epState.offset += more.length;
+    if (window._epState.playlistMembers) _applyPlaylistMemberStates(window._epState.playlistMembers);
 
     const container = btn?.parentElement;
     if (!container) return;
@@ -1612,8 +1652,8 @@ window._toggleEpNotes = function (id) {
   }
 };
 
-function episodeRow(ep, feed) {
-  const imgSrc = ep.custom_image_url || ep.episode_image_url || feed?.custom_image_url || feed?.image_url || "";
+function episodeRow(ep, feed, { draggable: isDraggable = false, hideSeqNumber = false } = {}) {
+  const imgSrc = ep.custom_image_url || ep.episode_image_url || feed?.custom_image_url || feed?.image_url || ep.feed_image_url || "";
   const isDownloaded = ep.status === "downloaded";
   const isActive = ep.status === "downloading" || ep.status === "queued";
 
@@ -1720,10 +1760,10 @@ function episodeRow(ep, feed) {
         ${svg('<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>', 'width="14" height="14"')}
         Save to device
       </a>
-      <button data-action="ep-more-close-seq" data-ep-id="${ep.id}" data-seq="${ep.seq_number ?? ""}" data-locked="${ep.seq_number_locked}">
+      ${!hideSeqNumber ? `<button data-action="ep-more-close-seq" data-ep-id="${ep.id}" data-seq="${ep.seq_number ?? ""}" data-locked="${ep.seq_number_locked}">
         ${svg('<line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/>', 'width="14" height="14"')}
         Set episode number
-      </button>
+      </button>` : ""}
       <button data-action="ep-more-close-tags" data-ep-id="${ep.id}" data-tags="${escHTML(JSON.stringify(ep.custom_id3_tags || null))}">
         ${svg('<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>', 'width="14" height="14"')}
         Edit ID3 tags
@@ -1736,6 +1776,12 @@ function episodeRow(ep, feed) {
   </div>`;
 
   const actionBtns = playBtn + statusActionBtn + `
+  <button class="btn btn-ghost btn-sm btn-icon" title="Add to playlist"
+          data-action="add-to-playlist" data-ep-id="${ep.id}" data-ep-title="${escHTML(ep.title || "")}">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="14" height="14">
+      <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+    </svg>
+  </button>
   <button class="btn btn-ghost btn-sm btn-icon" title="${ep.played ? "Mark as unplayed" : "Mark as played"}"
           data-action="toggle-ep-played" data-ep-id="${ep.id}">
     ${ep.played
@@ -1747,7 +1793,10 @@ function episodeRow(ep, feed) {
     ? `<div class="ep-notes-panel"><div class="ep-notes-inner">${_sanitizeNotes(ep.description)}</div></div>`
     : "";
 
-  return `<div class="episode-item${ep.description ? " has-notes" : ""}" id="ep-${ep.id}" data-status="${ep.status}" data-title="${(ep.title || "").toLowerCase().replace(/"/g, "&quot;")}"${ep.played ? ' data-played="1"' : ""}${ep.description ? ` data-action="toggle-ep-notes" data-ep-id="${ep.id}"` : ""}>
+  const dragHandle = isDraggable ? `<div class="ep-drag-handle" title="Drag to reorder">${svg('<line x1="8" y1="6" x2="16" y2="6"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="8" y1="18" x2="16" y2="18"/>', 'width="18" height="18"')}</div>` : "";
+
+  return `<div class="episode-item${ep.description ? " has-notes" : ""}" id="ep-${ep.id}" data-status="${ep.status}" data-title="${(ep.title || "").toLowerCase().replace(/"/g, "&quot;")}"${ep.played ? ' data-played="1"' : ""}${ep.description ? ` data-action="toggle-ep-notes" data-ep-id="${ep.id}"` : ""}${isDraggable ? ' draggable="true"' : ""}>
+    ${dragHandle}
     <input type="checkbox" class="bulk-check ep-checkbox" data-ep-id="${ep.id}" data-action="bulk-toggle" />
     ${artArea}
     <div class="episode-info">

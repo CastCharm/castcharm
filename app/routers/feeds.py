@@ -84,7 +84,7 @@ def _bulk_episode_counts(feed_ids: list[int], db: Session) -> dict[int, dict]:
             "hidden_count":             row.hidden_count             or 0,
             "unplayed_count":           row.unplayed_count           or 0,
             "needs_rename":             (row.needs_rename_count or 0) > 0,
-            "last_download_at":         row.last_download_at,
+            "last_download_at":         datetime.fromisoformat(row.last_download_at) if row.last_download_at else None,
         }
         for row in rows
     }

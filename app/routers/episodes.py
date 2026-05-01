@@ -128,20 +128,27 @@ def serve_episode_file(episode_id: int, db: Session = Depends(get_db)):
 
 @router.get("/{episode_id}/stream")
 def stream_episode(episode_id: int, db: Session = Depends(get_db)):
-    """Stream the audio file inline (supports HTTP range requests for seeking)."""
-    from fastapi.responses import FileResponse
+    """Stream the audio file inline (supports HTTP range requests for seeking).
+
+    If the episode is downloaded, serves the local file directly.
+    Otherwise redirects to the original RSS enclosure URL so the client can
+    stream from the source without a round-trip through the server.
+    """
+    from fastapi.responses import FileResponse, RedirectResponse
     ep = db.query(Episode).filter(Episode.id == episode_id).first()
     if not ep:
         raise HTTPException(status_code=404, detail="Episode not found")
-    if not ep.file_path or not os.path.exists(ep.file_path):
-        raise HTTPException(status_code=404, detail="File not found on disk")
-    _assert_file_in_base(ep.file_path, db)
-    mime = ep.enclosure_type or "audio/mpeg"
-    return FileResponse(
-        path=ep.file_path,
-        media_type=mime,
-        headers={"Content-Disposition": "inline"},
-    )
+    if ep.file_path and os.path.exists(ep.file_path):
+        _assert_file_in_base(ep.file_path, db)
+        mime = ep.enclosure_type or "audio/mpeg"
+        return FileResponse(
+            path=ep.file_path,
+            media_type=mime,
+            headers={"Content-Disposition": "inline"},
+        )
+    if ep.enclosure_url:
+        return RedirectResponse(url=ep.enclosure_url, status_code=302)
+    raise HTTPException(status_code=404, detail="No local file and no enclosure URL for this episode")
 
 
 @router.get("/{episode_id}/cover.jpg")

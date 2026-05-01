@@ -202,3 +202,45 @@ class Episode(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     feed = relationship("Feed", back_populates="episodes")
+
+
+class Playlist(Base):
+    __tablename__ = "playlists"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    # 'feed' playlists are computed live; 'custom' playlists use PlaylistEpisode rows
+    type = Column(String, nullable=False)          # 'feed' | 'custom'
+    feed_id = Column(Integer, ForeignKey("feeds.id", ondelete="CASCADE"), nullable=True)
+    filter = Column(String, default="unplayed")    # 'all' | 'unplayed' (feed playlists only)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    episodes = relationship("PlaylistEpisode", back_populates="playlist",
+                            order_by="PlaylistEpisode.position", cascade="all, delete-orphan")
+
+
+class PlaylistEpisode(Base):
+    __tablename__ = "playlist_episodes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    playlist_id = Column(Integer, ForeignKey("playlists.id", ondelete="CASCADE"), nullable=False)
+    episode_id = Column(Integer, ForeignKey("episodes.id", ondelete="CASCADE"), nullable=False)
+    position = Column(Integer, nullable=False)
+    added_at = Column(DateTime, default=datetime.utcnow)
+
+    playlist = relationship("Playlist", back_populates="episodes")
+    episode = relationship("Episode")
+
+
+class PlayerState(Base):
+    __tablename__ = "player_state"
+
+    id = Column(Integer, primary_key=True, default=1)
+    current_episode_id = Column(Integer, ForeignKey("episodes.id", ondelete="SET NULL"), nullable=True)
+    context_type = Column(String, nullable=True)   # 'feed' | 'playlist'
+    context_id = Column(Integer, nullable=True)    # feed_id or playlist_id
+    context_filter = Column(String, nullable=True) # 'all' | 'unplayed' (for feed context)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    current_episode = relationship("Episode")

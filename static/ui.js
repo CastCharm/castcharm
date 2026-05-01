@@ -226,6 +226,11 @@ document.addEventListener("click", (e) => {
     toggleEpPlayed(Number(el.dataset.epId));
     return;
   }
+  if (action === "add-to-playlist") {
+    e.stopPropagation();
+    window.showAddToPlaylist(Number(el.dataset.epId), el.dataset.epTitle || "");
+    return;
+  }
   if (action === "unlink-feed") {
     unlinkSupplementaryFeed(Number(el.dataset.podcastId), Number(el.dataset.feedId));
     return;
