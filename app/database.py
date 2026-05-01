@@ -97,8 +97,39 @@ def _migrate_db():
         ("feeds",           "autoclean_exclude",             "BOOLEAN DEFAULT 0"),
         ("global_settings", "sync_lookback_limit",           "INTEGER DEFAULT 50"),
         ("episodes",        "imported",                      "BOOLEAN DEFAULT 0"),
+        ("playlists",       "description",                   "TEXT"),
+    ]
+    new_tables = [
+        """CREATE TABLE IF NOT EXISTS playlists (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name VARCHAR NOT NULL,
+            description TEXT,
+            type VARCHAR NOT NULL,
+            feed_id INTEGER REFERENCES feeds(id) ON DELETE CASCADE,
+            filter VARCHAR DEFAULT 'unplayed',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS playlist_episodes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+            episode_id INTEGER NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+            position INTEGER NOT NULL,
+            added_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS player_state (
+            id INTEGER PRIMARY KEY,
+            current_episode_id INTEGER REFERENCES episodes(id) ON DELETE SET NULL,
+            context_type VARCHAR,
+            context_id INTEGER,
+            context_filter VARCHAR,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )""",
     ]
     with engine.connect() as conn:
+        for stmt in new_tables:
+            conn.execute(text(stmt))
+        conn.commit()
+
         for table, column, col_def in migrations:
             existing = {
                 row[1]

@@ -21,6 +21,8 @@ Router.register("/", viewDashboard);
 Router.register("/feeds", viewFeeds);
 Router.register("/feeds/:id", viewFeedDetail);
 Router.register("/downloads", viewDownloads);
+Router.register("/playlists", renderPlaylists);
+Router.register("/playlists/:id", viewPlaylistDetail);
 Router.register("/settings", viewSettings);
 Router.register("/stats", viewStats);
 Router.register("/logs", viewLogs);

@@ -229,6 +229,77 @@ class EpisodeOut(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Playlists
+# ---------------------------------------------------------------------------
+
+class PlaylistCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    type: str = "custom"       # 'feed' | 'custom'
+    feed_id: Optional[int] = None
+    filter: str = "unplayed"   # 'all' | 'unplayed'
+
+
+class PlaylistUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    filter: Optional[str] = None
+
+
+class PlaylistEpisodeOut(BaseModel):
+    episode_id: int
+    position: int
+    added_at: datetime
+    episode: "EpisodeOut"
+
+    model_config = {"from_attributes": True}
+
+
+class PlaylistOut(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    type: str
+    feed_id: Optional[int] = None
+    filter: str
+    created_at: datetime
+    episode_count: int = 0
+
+    model_config = {"from_attributes": True}
+
+
+class PlaylistEpisodeAdd(BaseModel):
+    episode_id: int
+
+
+class PlaylistReorder(BaseModel):
+    episode_ids: list[int]   # full ordered list of episode IDs
+
+
+# ---------------------------------------------------------------------------
+# Player state
+# ---------------------------------------------------------------------------
+
+class PlayerStateOut(BaseModel):
+    current_episode_id: Optional[int] = None
+    context_type: Optional[str] = None
+    context_id: Optional[int] = None
+    context_filter: Optional[str] = None
+    current_episode: Optional["EpisodeOut"] = None
+    queue: list["EpisodeOut"] = []
+    queue_position: Optional[int] = None   # index of current episode in queue
+
+    model_config = {"from_attributes": True}
+
+
+class PlayerPlayRequest(BaseModel):
+    context_type: str              # 'feed' | 'playlist'
+    context_id: int
+    episode_id: Optional[int] = None   # if omitted, smart-start logic applies
+    context_filter: str = "unplayed"   # only used when context_type='feed'
+
+
+# ---------------------------------------------------------------------------
 # System status
 # ---------------------------------------------------------------------------
 
