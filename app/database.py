@@ -98,6 +98,10 @@ def _migrate_db():
         ("global_settings", "sync_lookback_limit",           "INTEGER DEFAULT 50"),
         ("episodes",        "imported",                      "BOOLEAN DEFAULT 0"),
         ("playlists",       "description",                   "TEXT"),
+        # On by default. Safe on upgrade because an existing install has no API
+        # keys, and the gate is "enabled AND valid key" — so this alone opens
+        # nothing. Being on is what lets a native client enrol itself later.
+        ("global_settings", "api_enabled",                   "BOOLEAN DEFAULT 1"),
     ]
     new_tables = [
         """CREATE TABLE IF NOT EXISTS playlists (
@@ -115,6 +119,14 @@ def _migrate_db():
             episode_id INTEGER NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
             position INTEGER NOT NULL,
             added_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS api_keys (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name VARCHAR NOT NULL,
+            key_hash VARCHAR NOT NULL UNIQUE,
+            key_prefix VARCHAR NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            last_used_at DATETIME
         )""",
         """CREATE TABLE IF NOT EXISTS player_state (
             id INTEGER PRIMARY KEY,
@@ -145,6 +157,7 @@ def _migrate_db():
             "CREATE INDEX IF NOT EXISTS ix_episodes_hidden         ON episodes (hidden)",
             "CREATE INDEX IF NOT EXISTS ix_episodes_played         ON episodes (played)",
             "CREATE INDEX IF NOT EXISTS ix_feeds_primary_feed_id   ON feeds    (primary_feed_id)",
+            "CREATE INDEX IF NOT EXISTS ix_api_keys_key_hash       ON api_keys (key_hash)",
         ]
         for stmt in indexes:
             conn.execute(text(stmt))

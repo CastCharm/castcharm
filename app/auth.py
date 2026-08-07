@@ -5,6 +5,7 @@ stored in the database. Sessions are identified by an httpOnly cookie named
 COOKIE_NAME. All sensitive comparisons go through passlib so timing is
 constant and salting is automatic.
 """
+import hashlib
 import logging
 import os
 import secrets
@@ -114,6 +115,56 @@ def cleanup_expired_sessions(db: Session) -> None:
     from app.models import AuthSession
     db.query(AuthSession).filter(AuthSession.expires_at < datetime.utcnow()).delete()
     db.commit()
+
+
+# ── API key helpers ────────────────────────────────────────────────────────────
+# API keys are 256-bit random tokens, so unlike passwords there is nothing to
+# guess and no need for a slow KDF. Plain SHA-256 keeps verification cheap —
+# bcrypt's ~100 ms would be crippling when it runs on every single API request.
+
+API_KEY_PREFIX = "cc_"
+# "cc_" plus 8 characters — enough to tell keys apart in the settings list
+_API_KEY_DISPLAY_CHARS = 11
+
+
+def hash_api_key(plain: str) -> str:
+    return hashlib.sha256(plain.encode()).hexdigest()
+
+
+def generate_api_key() -> tuple[str, str, str]:
+    """Return (plaintext, hash, display_prefix) for a brand-new key."""
+    plain = API_KEY_PREFIX + secrets.token_urlsafe(32)
+    return plain, hash_api_key(plain), plain[:_API_KEY_DISPLAY_CHARS]
+
+
+def extract_api_key(request) -> Optional[str]:
+    """Pull a key from either 'Authorization: Bearer <key>' or 'X-API-Key: <key>'."""
+    header = request.headers.get("Authorization", "")
+    if header[:7].lower() == "bearer ":
+        return header[7:].strip() or None
+    return request.headers.get("X-API-Key", "").strip() or None
+
+
+def validate_api_key(plain: str, db: Session) -> Optional[int]:
+    """Return the key's id if it exists, else None. Records last_used_at.
+
+    The id is returned rather than a bool so the request can know *which* key
+    authenticated it, which is what lets a client revoke its own key on logout.
+    """
+    from app.models import ApiKey
+    key = db.query(ApiKey).filter(ApiKey.key_hash == hash_api_key(plain)).first()
+    if not key:
+        return None
+    key.last_used_at = datetime.utcnow()
+    db.commit()
+    return key.id
+
+
+def is_api_enabled(db: Session) -> bool:
+    """True when external API access has been switched on in settings."""
+    from app.models import GlobalSettings
+    gs = db.query(GlobalSettings).first()
+    return bool(gs and gs.api_enabled)
 
 
 # ── Auth state helpers ─────────────────────────────────────────────────────────

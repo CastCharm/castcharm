@@ -38,6 +38,7 @@ class GlobalSettingsBase(BaseModel):
     autoclean_mode: str = "unplayed"
     autoclean_time: str = "02:00"
     sync_lookback_limit: int = 50
+    api_enabled: bool = True
 
 
 class GlobalSettingsUpdate(BaseModel):
@@ -71,12 +72,45 @@ class GlobalSettingsUpdate(BaseModel):
     autoclean_mode: Optional[str] = None
     autoclean_time: Optional[str] = None
     sync_lookback_limit: Optional[int] = None
+    api_enabled: Optional[bool] = None
 
 
 class GlobalSettingsOut(GlobalSettingsBase):
     id: int
 
     model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# API keys
+# ---------------------------------------------------------------------------
+
+class ApiKeyCreate(BaseModel):
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def name_not_empty(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Name must not be empty")
+        return v
+
+
+class ApiKeyOut(BaseModel):
+    id: int
+    name: str
+    key_prefix: str
+    created_at: datetime
+    last_used_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class ApiKeyCreated(ApiKeyOut):
+    # Only the create endpoint returns this. The plaintext is never stored, so
+    # this is the one and only time it can be read.
+    key: str
 
 
 # ---------------------------------------------------------------------------

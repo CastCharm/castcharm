@@ -71,6 +71,12 @@ const API = {
     return API.get(`/api/settings/logs?${p}`);
   },
 
+  // ── External API keys ────────────────────────────────────────
+  // createApiKey is the only call that ever returns the plaintext key.
+  getApiKeys:   ()     => API.get("/api/settings/api-keys"),
+  createApiKey: (name) => API.post("/api/settings/api-keys", { name }),
+  revokeApiKey: (id)   => API.delete(`/api/settings/api-keys/${id}`),
+
   // ── Feeds ────────────────────────────────────────────────────
   getFeeds:     () =>         API.get("/api/feeds"),
   addFeed:         (url, downloadAll = false, titleOverride = null) => API.post("/api/feeds", { url, download_all: downloadAll, title_override: titleOverride || undefined }),

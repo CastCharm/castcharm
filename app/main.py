@@ -117,27 +117,39 @@ APP_VERSION = _os.environ.get("APP_VERSION", "dev")
 
 app = FastAPI(
     title="CastCharm",
-    description="Self-hosted podcast manager",
+    description=(
+        "Self-hosted podcast manager.\n\n"
+        "External clients authenticate with an API key generated under "
+        "Settings → External API, sent as either `Authorization: Bearer <key>` "
+        "or `X-API-Key: <key>`."
+    ),
     version=APP_VERSION,
     lifespan=lifespan,
     docs_url=None,
     redoc_url=None,
+    # Served under /api/ so AuthMiddleware covers it — at the default
+    # /openapi.json the schema sits outside the middleware's path check and is
+    # readable by anyone who can reach the port.
+    openapi_url="/api/openapi.json",
 )
 
 @app.get("/api/docs", include_in_schema=False)
 async def swagger_ui():
-    html = """<!DOCTYPE html>
+    # ?v=<version> matches what index.html does for its assets. Static files are
+    # served immutable for a year, so without it an upgraded container would keep
+    # serving a browser-cached swagger-init.js pointing at the old schema URL.
+    html = f"""<!DOCTYPE html>
 <html><head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>CastCharm API</title>
-  <link rel="stylesheet" href="/static/swagger/swagger-ui.css">
+  <link rel="stylesheet" href="/static/swagger/swagger-ui.css?v={APP_VERSION}">
 </head><body>
   <div id="swagger-ui"></div>
-  <script src="/static/swagger/swagger-ui-bundle.js"></script>
-  <script src="/static/swagger/swagger-init.js"></script>
+  <script src="/static/swagger/swagger-ui-bundle.js?v={APP_VERSION}"></script>
+  <script src="/static/swagger/swagger-init.js?v={APP_VERSION}"></script>
 </body></html>"""
-    return HTMLResponse(html)
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
@@ -199,6 +211,9 @@ _AUTH_EXEMPT_EXACT = {"/api/status"}
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: StarletteRequest, call_next):
         path = request.url.path
+        # Recorded so key-management endpoints can refuse API-key callers.
+        # See app/routers/api_keys.py.
+        request.state.auth_method = "none"
 
         # Non-API routes (SPA shell, static assets) are always served
         if not path.startswith("/api/"):
@@ -213,12 +228,32 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Check whether auth is required for this instance
         db = SessionLocal()
         try:
-            from app.auth import is_auth_required, validate_session, COOKIE_NAME
+            from app.auth import (
+                COOKIE_NAME, extract_api_key, is_api_enabled,
+                is_auth_required, validate_api_key, validate_session,
+            )
+
+            # API keys are checked before the session so that last_used_at is
+            # recorded even on instances with login turned off.
+            api_key = extract_api_key(request)
+            if api_key:
+                # Skip validation entirely when the master switch is off, so a
+                # disabled key never has its last_used_at touched.
+                key_id = validate_api_key(api_key, db) if is_api_enabled(db) else None
+                if key_id is not None:
+                    request.state.auth_method = "api_key"
+                    request.state.api_key_id = key_id
+                    return await call_next(request)
+                log.warning("Rejected API key for %s", path)
+                # Fall through: a bad key is treated as no key, so an instance
+                # with login disabled stays as open as it was before.
+
             if not is_auth_required(db):
                 return await call_next(request)
 
             token = request.cookies.get(COOKIE_NAME)
             if token and validate_session(token, db):
+                request.state.auth_method = "session"
                 return await call_next(request)
         finally:
             db.close()
@@ -233,10 +268,12 @@ app.add_middleware(AuthMiddleware)
 
 # API routers
 from app.routers import feeds, episodes, settings as settings_router, stats as stats_router  # noqa: E402
+from app.routers.api_keys import router as api_keys_router  # noqa: E402
 from app.routers.auth import router as auth_router  # noqa: E402
 from app.routers.playlists import router as playlists_router  # noqa: E402
 from app.routers.player import router as player_router  # noqa: E402
 app.include_router(auth_router)
+app.include_router(api_keys_router)
 app.include_router(feeds.router)
 app.include_router(episodes.router)
 app.include_router(settings_router.router)
