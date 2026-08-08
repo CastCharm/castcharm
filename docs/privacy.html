@@ -37,7 +37,7 @@
 <div class="content-wrap">
 <div class="content-page">
 <h1>Privacy Policy</h1>
-<p class="page-meta">Last updated: April 24, 2026</p>
+<p class="page-meta">Last updated: August 8, 2026</p>
 <p>
         This privacy policy explains how CastCharm handles data when you use the CastCharm
         server software, the CastCharm Android app, and this website. CastCharm is designed
@@ -84,7 +84,7 @@
       </p>
 <ul>
 <li>The CastCharm server address you enter</li>
-<li>Login/session information needed to stay connected to your server, when authentication is enabled</li>
+<li>An access key issued by your server so the app can stay signed in without keeping your password. On older servers that do not support keys, a session cookie is used instead.</li>
 <li>Podcast, feed, episode, artwork, and playback information copied from your server for app use</li>
 <li>Downloaded episode files saved for offline listening</li>
 <li>Playback progress and played/unplayed changes waiting to sync back to your server</li>
@@ -128,6 +128,13 @@
         is enabled, authentication is handled by the server you connect to. Server-side credential
         data is stored on that server, not by the CastCharm project. The Android app stores the
         information it needs to keep the app connected to the configured server.
+      </p>
+<p>
+        Servers may also issue per-device access keys so that mobile apps and scripts can sign in
+        without holding a copy of your password. The Android app requests a key automatically the
+        first time you sign in and stores it on the device. You can see and revoke individual keys
+        from the server's <strong>Settings → External API</strong> panel, and you can revoke every
+        key at once by ticking the "revoke all API keys" option when changing your password.
       </p>
 <p>
         If you use CastCharm over an unencrypted HTTP connection, information sent between the app

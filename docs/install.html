@@ -70,6 +70,18 @@
         <strong>Default paths:</strong> the database is saved to <code>./data/</code> and downloaded audio files go into <code>./downloads/</code>, both relative to the directory containing your <code>docker-compose.yml</code>.
       </div>
 
+      <!-- First-run wizard -->
+      <h2>First run</h2>
+      <p>The wizard walks you through six short steps. You can change any of these later in Settings.</p>
+      <ol>
+        <li><strong>Login</strong> — pick a username and password, or skip this step to leave your instance open.</li>
+        <li><strong>Theme</strong> — pick a colour scheme.</li>
+        <li><strong>Timezone</strong> — used for date-prefixed filenames and year-based folders.</li>
+        <li><strong>Downloads folder</strong> — where inside the container to save audio files. This maps to <code>DOWNLOAD_PATH</code> on the host.</li>
+        <li><strong>File options</strong> — filename format and folder organisation.</li>
+        <li><strong>External API</strong> — leave on if you plan to use the Android app or scripts; leave off if you'll only ever use the web interface.</li>
+      </ol>
+
       <!-- Full compose file -->
       <h2>Full docker-compose.yml</h2>
       <p>Below is the complete file for reference. You can customise paths and the port via environment variables or a <code>.env</code> file placed in the same directory.</p>
@@ -109,6 +121,8 @@
       <h2>Environment variables</h2>
       <p>Set these in a <code>.env</code> file in the same folder as your <code>docker-compose.yml</code>, or pass them directly to the container.</p>
 
+      <p>Most people only need these three:</p>
+
       <table class="config-table">
         <thead>
           <tr>
@@ -136,11 +150,39 @@
         </tbody>
       </table>
 
+      <h3>Advanced options</h3>
+      <p>You can safely skip this section unless you're running CastCharm behind a reverse proxy in another container, or building your own image.</p>
+
+      <table class="config-table">
+        <thead>
+          <tr>
+            <th>Variable</th>
+            <th>Default</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>CASTCHARM_TRUSTED_PROXIES</td>
+            <td><em>(empty)</em></td>
+            <td>Comma-separated list of IP addresses that are allowed to tell CastCharm the "real" client IP via the <code>X-Forwarded-For</code> header. The loopback address (<code>127.0.0.1</code>) is trusted by default, so a proxy on the same host needs no change. If your proxy runs in its own container (Traefik, nginx in Docker), add its container IP here — otherwise the login rate-limit will lump every failed attempt together under the proxy's address.</td>
+          </tr>
+          <tr>
+            <td>APP_VERSION</td>
+            <td>dev</td>
+            <td>Version string reported by <code>/api/status</code> and shown in the API docs. Set automatically by official container images; only useful when building your own.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p style="font-size:13px;color:var(--text-3);margin-top:8px">The login cookie's <code>Secure</code> flag is set automatically based on whether the current request came in over HTTPS, so no configuration is needed for either plain-HTTP or HTTPS deployments.</p>
+
       <p>The <code>DATABASE_URL</code>, <code>DEFAULT_DOWNLOAD_PATH</code>, and <code>CLEAN_RSS_PATH</code> variables inside the container are set automatically by the compose file and do not normally need to be changed.</p>
 
       <!-- Reverse proxy -->
       <h2>Running behind a reverse proxy</h2>
-      <p>The container is configured to trust <code>X-Forwarded-*</code> headers, so it works out of the box behind nginx, Caddy, Traefik, or any other reverse proxy.</p>
+      <p>CastCharm works behind nginx, Caddy, Traefik, or any other reverse proxy. If your proxy runs on the same host as CastCharm (the usual setup), no configuration is needed — just point it at the container and go.</p>
+      <p>If your proxy runs in a <em>separate container</em> and you want the login rate-limit to see the real client IP instead of the proxy's, set <code>CASTCHARM_TRUSTED_PROXIES</code> to the proxy's container IP. See the Advanced options above.</p>
 
       <h3>Caddy example</h3>
       <div class="code-card">
@@ -172,6 +214,30 @@
     }
 }</pre>
       </div>
+
+      <!-- External API -->
+      <h2>External API access</h2>
+      <p>Everything the web interface can do is also available as a REST API. This is what the Android app uses to talk to your server, and it's how scripts and home-automation tools can reach your library.</p>
+      <p>To let an outside app or script in:</p>
+      <ol>
+        <li>Open <strong>Settings → External API</strong> in the web interface.</li>
+        <li>Make sure <strong>Enable external API access</strong> is on.</li>
+        <li>Click <strong>Generate new key</strong> and give it a name (e.g. "Phone" or "Backup script").</li>
+        <li>Copy the key that appears — it's only shown once.</li>
+      </ol>
+      <p>The Android app handles all of this for you: log in once with your username and password, and the app generates and stores its own key automatically.</p>
+
+      <h3>Managing keys</h3>
+      <p>The keys list in Settings shows when each key was last used. You can:</p>
+      <ul>
+        <li><strong>Rename</strong> a key so you can tell two identical devices apart.</li>
+        <li><strong>Revoke</strong> a single key — that device stops working immediately, others are unaffected.</li>
+        <li><strong>Revoke unused</strong> — a one-click cleanup for keys that have never been used or haven't been used in 30 days (common when an app was uninstalled without logging out).</li>
+      </ul>
+      <p>CastCharm also runs a small daily cleanup that removes keys never used within a week of being created — usually the fingerprint of a failed enrolment.</p>
+
+      <h3>Interactive API docs</h3>
+      <p>Full API reference with an interactive "try it out" panel is at <code>/api/docs</code> on your instance (e.g. <code>http://localhost:8000/api/docs</code>). Use the <strong>Authorize</strong> button to paste an API key for testing.</p>
 
       <!-- Data & backups -->
       <h2>Data &amp; backups</h2>

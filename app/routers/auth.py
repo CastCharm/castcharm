@@ -1,5 +1,6 @@
 """Authentication and first-run setup endpoints."""
 import logging
+import os
 from typing import Optional
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
@@ -10,12 +11,16 @@ from sqlalchemy.orm import Session
 from app.auth import (
     COOKIE_NAME,
     SESSION_LIFETIME,
-    SECURE_COOKIES,
     check_rate_limit,
     clear_failures,
+    cookie_secure_for,
     create_session,
     delete_session,
+    extract_api_key,
+    generate_api_key,
     hash_password,
+    is_api_enabled,
+    validate_api_key,
     record_failure,
     remaining_attempts,
     validate_session,
@@ -23,13 +28,22 @@ from app.auth import (
     is_auth_required,
 )
 from app.database import get_db
+from app.schemas import ApiKeyCreated, ApiKeyOut
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["auth"])
 
-# IPs from which X-Forwarded-For is trusted (loopback = same-host reverse proxy)
-_TRUSTED_PROXY_IPS = frozenset({"127.0.0.1", "::1"})
+# IPs from which X-Forwarded-For is trusted (loopback = same-host reverse proxy).
+# The default covers a proxy running on the same host; CASTCHARM_TRUSTED_PROXIES
+# accepts a comma-separated list of additional IPs for container-network setups
+# where Traefik / nginx runs in its own container with a different address.
+_extra_proxies = {
+    p.strip() for p in os.environ.get("CASTCHARM_TRUSTED_PROXIES", "").split(",") if p.strip()
+}
+_TRUSTED_PROXY_IPS = frozenset({"127.0.0.1", "::1"} | _extra_proxies)
+if _extra_proxies:
+    log.info("Trusting X-Forwarded-For from additional proxies: %s", sorted(_extra_proxies))
 
 
 def _get_client_ip(request: Request) -> str:
@@ -59,6 +73,15 @@ class CredentialsUpdate(BaseModel):
     current_password: str
     new_username: str
     new_password: str
+    # When True, delete every AuthSession row *except* the one the caller is
+    # holding. Used for the "sign out other browser sessions" checkbox on the
+    # Security panel — a natural expectation when changing the password because
+    # of a suspected compromise.
+    revoke_other_sessions: bool = False
+    # When True, delete every ApiKey row so no Android/script credential
+    # survives the password change. Also lets the user roll their keys wholesale
+    # without visiting the External API panel.
+    revoke_all_api_keys: bool = False
 
     @field_validator("new_password")
     @classmethod
@@ -76,6 +99,18 @@ class CredentialsUpdate(BaseModel):
         return v
 
 
+class ExchangeKeyRequest(BaseModel):
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def name_not_empty(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Name must not be empty")
+        return v
+
+
 class SetupCompleteRequest(BaseModel):
     # Auth
     enable_auth: bool = False
@@ -89,12 +124,14 @@ class SetupCompleteRequest(BaseModel):
     organize_by_year: Optional[bool] = None
     save_xml: Optional[bool] = None
     timezone: Optional[str] = None
+    api_enabled: Optional[bool] = None
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.get("/api/auth/status", response_model=AuthStatusOut)
 def auth_status(
+    request: Request,
     db: Session = Depends(get_db),
     cc_session: Optional[str] = Cookie(default=None),
 ):
@@ -104,10 +141,17 @@ def auth_status(
     auth_enabled = bool(gs and gs.auth_enabled and gs.auth_password_hash)
     if not auth_enabled:
         logged_in = True  # no auth configured = always accessible
-    elif cc_session:
-        logged_in = validate_session(cc_session, db)
+    elif cc_session and validate_session(cc_session, db):
+        logged_in = True
     else:
-        logged_in = False
+        # A client authenticating by API key is logged in just as much as one
+        # holding a cookie. Without this, a native app whose cookie has lapsed
+        # would be sent back to the login screen despite holding a valid key —
+        # which is the exact problem keys exist to solve.
+        api_key = extract_api_key(request)
+        logged_in = bool(
+            api_key and is_api_enabled(db) and validate_api_key(api_key, db) is not None
+        )
     return AuthStatusOut(
         setup_complete=setup_complete,
         auth_enabled=auth_enabled,
@@ -154,7 +198,7 @@ def login(
         max_age=int(SESSION_LIFETIME.total_seconds()),
         httponly=True,
         samesite="strict",
-        secure=SECURE_COOKIES,
+        secure=cookie_secure_for(request),
         path="/",
     )
     log.info("Login successful for user '%s' from %s", body.username, ip)
@@ -180,8 +224,15 @@ def update_credentials(
     db: Session = Depends(get_db),
     cc_session: Optional[str] = Cookie(default=None),
 ):
-    """Update username and password. Requires current password to confirm identity."""
-    from app.models import GlobalSettings
+    """Update username and password. Requires current password to confirm identity.
+
+    Two optional flags let the caller nuke ambient credentials in the same
+    request — natural if they're changing password because of a suspected
+    compromise:
+      revoke_other_sessions — deletes every AuthSession except the caller's
+      revoke_all_api_keys   — deletes every ApiKey (every device must re-enrol)
+    """
+    from app.models import AuthSession, ApiKey, GlobalSettings
     gs = db.query(GlobalSettings).first()
     if not gs:
         raise HTTPException(status_code=404, detail="Settings not found")
@@ -196,9 +247,24 @@ def update_credentials(
     gs.auth_username = body.new_username
     gs.auth_password_hash = hash_password(body.new_password)
     gs.auth_enabled = True
+
+    revoked_sessions = 0
+    if body.revoke_other_sessions:
+        q = db.query(AuthSession)
+        if cc_session:
+            q = q.filter(AuthSession.token != cc_session)
+        revoked_sessions = q.delete(synchronize_session=False)
+
+    revoked_keys = 0
+    if body.revoke_all_api_keys:
+        revoked_keys = db.query(ApiKey).delete(synchronize_session=False)
+
     db.commit()
-    log.info("Credentials updated for user '%s'", body.new_username)
-    return {"ok": True}
+    log.info(
+        "Credentials updated for user '%s' (revoked_sessions=%d, revoked_keys=%d)",
+        body.new_username, revoked_sessions, revoked_keys,
+    )
+    return {"ok": True, "revoked_sessions": revoked_sessions, "revoked_keys": revoked_keys}
 
 
 @router.post("/api/auth/disable")
@@ -227,9 +293,52 @@ def disable_auth(
     return {"ok": True}
 
 
+@router.post("/api/auth/exchange-key", response_model=ApiKeyCreated)
+def exchange_session_for_key(
+    body: ExchangeKeyRequest,
+    db: Session = Depends(get_db),
+    cc_session: Optional[str] = Cookie(default=None),
+):
+    """Trade a valid login session for a long-lived API key.
+
+    Lets a native client log in once with username and password, then hold a
+    credential that never expires — instead of a session cookie whose client-side
+    lifetime is fixed at issue time and silently lapses.
+
+    SECURITY: /api/auth/ is exempt from AuthMiddleware (see _AUTH_EXEMPT_PREFIXES
+    in app/main.py), so this endpoint has to check the session itself, the same
+    way update_credentials and disable_auth do. Without that check anyone able to
+    reach the port could mint a key without ever logging in.
+
+    A caller holding only an API key has no session cookie, so it fails the check
+    below — keys cannot mint further keys, matching app/routers/api_keys.py.
+    """
+    from app.models import ApiKey, GlobalSettings
+
+    if is_auth_required(db):
+        if not cc_session or not validate_session(cc_session, db):
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+    gs = db.query(GlobalSettings).first()
+    if not gs or not gs.api_enabled:
+        raise HTTPException(
+            status_code=403,
+            detail="External API access is disabled. Enable it under Settings → External API.",
+        )
+
+    plain, key_hash, prefix = generate_api_key()
+    key = ApiKey(name=body.name, key_hash=key_hash, key_prefix=prefix)
+    db.add(key)
+    db.commit()
+    db.refresh(key)
+    log.info("API key '%s' issued via session exchange (%s…)", key.name, key.key_prefix)
+    return ApiKeyCreated(**ApiKeyOut.model_validate(key).model_dump(), key=plain)
+
+
 @router.post("/api/setup/complete")
 def complete_setup(
     body: SetupCompleteRequest,
+    request: Request,
     response: Response,
     db: Session = Depends(get_db),
 ):
@@ -267,6 +376,8 @@ def complete_setup(
         gs.save_xml = body.save_xml
     if body.timezone is not None:
         gs.timezone = body.timezone
+    if body.api_enabled is not None:
+        gs.api_enabled = body.api_enabled
 
     gs.setup_complete = True
     db.commit()
@@ -281,6 +392,7 @@ def complete_setup(
             max_age=int(SESSION_LIFETIME.total_seconds()),
             httponly=True,
             samesite="strict",
+            secure=cookie_secure_for(request),
             path="/",
         )
 

@@ -20,7 +20,7 @@ A self-hosted podcast manager with a clean web UI. Subscribe to RSS feeds, auto-
 - **Stats** — library-wide and per-feed statistics with charts
 - **Themes** — 20+ built-in colour themes
 - **Auth** — optional password protection
-- **API** — full REST API with Swagger docs at `/api/docs`
+- **API** — full REST API with Swagger docs at `/api/docs`, usable by external clients via API keys
 
 ---
 
@@ -44,7 +44,7 @@ Open **http://localhost:8000** — the setup wizard will guide you through initi
 
 ## Configuration
 
-All configuration is done via environment variables (or a `.env` file next to `docker-compose.yml`).
+All configuration is done via environment variables (or a `.env` file next to `docker-compose.yml`). Most people only need these three:
 
 | Variable | Default | Description |
 |---|---|---|
@@ -54,9 +54,22 @@ All configuration is done via environment variables (or a `.env` file next to `d
 
 The `DATABASE_URL`, `DEFAULT_DOWNLOAD_PATH`, and `CLEAN_RSS_PATH` variables inside the container are set automatically by `docker-compose.yml` and don't normally need to be changed.
 
+### Advanced options
+
+Skip this unless you're running behind a reverse proxy in another container or building your own image.
+
+| Variable | Default | Description |
+|---|---|---|
+| `CASTCHARM_TRUSTED_PROXIES` | *(empty)* | Comma-separated IPs allowed to set `X-Forwarded-For`. `127.0.0.1` and `::1` are trusted by default, so a proxy on the same host needs no change. Add your proxy's container IP if it runs separately, otherwise the login rate-limit lumps every failed attempt together under the proxy's address. |
+| `APP_VERSION` | `dev` | Version string reported by `/api/status` and shown in the API docs. Set automatically by official container images. |
+
+The login cookie's `Secure` flag is set automatically based on whether the current request came in over HTTPS — no configuration needed for either plain-HTTP or HTTPS deployments.
+
 ### Running behind a reverse proxy
 
-The default `CMD` includes `--proxy-headers` so `X-Forwarded-*` headers from nginx/Caddy/Traefik are trusted. No extra configuration needed.
+CastCharm works behind nginx, Caddy, Traefik, or any other reverse proxy. If your proxy runs on the same host as CastCharm (the usual setup), no configuration is needed.
+
+If your proxy runs in a *separate container* and you want the login rate-limit to see the real client IP instead of the proxy's, set `CASTCHARM_TRUSTED_PROXIES` to the proxy's container IP.
 
 ---
 
@@ -88,6 +101,66 @@ git clone https://github.com/CastCharm/castcharm
 cd castcharm
 docker compose up -d --build
 ```
+
+---
+
+## API
+
+Everything the web interface does goes through a REST API, and external clients
+can use the same endpoints. Interactive reference: **`/api/docs`**.
+
+### Enabling access
+
+External API access is **on by default** — you're asked about it during the setup
+wizard, and it can be changed any time under **Settings → External API**. On its
+own it grants nothing: a client also needs a key.
+
+To create one, press **Generate new key**, give it a name (e.g. `Android phone`),
+and copy the key — it's shown once and never again.
+
+Give each device or script its own key so you can revoke one without disturbing
+the rest. The list shows when each key was last used, which is a quick way to tell
+whether a client is actually connecting.
+
+Turning the toggle **off** is a kill switch: every key stops working immediately,
+including ones held by the mobile app. Keys aren't deleted, so switching it back
+on restores all of them.
+
+### Using a key
+
+Send it as either header:
+
+```bash
+curl -H "Authorization: Bearer cc_your_key_here" http://localhost:8000/api/feeds
+curl -H "X-API-Key: cc_your_key_here"            http://localhost:8000/api/status
+```
+
+### Native clients
+
+Apps can enrol themselves instead of asking you to paste a key by hand. After a
+normal username/password login, a client may call:
+
+```
+POST /api/auth/exchange-key    {"name": "Pixel 9"}
+```
+
+which trades the login session for a permanent key. The device then shows up in
+the key list like any other client, and revoking it there cuts that device off.
+This requires a real login session — a caller holding only an API key cannot
+exchange for another one.
+
+### Notes
+
+- **A key has the same power as logging in** — it can read your library, change
+  settings, and delete downloaded files. There are no read-only keys.
+- **Keys can't manage keys.** Creating and revoking keys requires a browser
+  session, so a leaked key can't mint replacements or hide its own revocation.
+- **Turning off the toggle disables every key at once**, without deleting them.
+- **If login is disabled, the whole instance is already open** to anyone who can
+  reach it, with or without a key. Enable login under Settings → Security if you
+  want keys to actually restrict anything.
+- Browser-based apps on other origins aren't supported — there's no CORS layer.
+  Scripts, native mobile apps, and anything server-side work fine.
 
 ---
 

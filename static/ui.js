@@ -58,6 +58,9 @@ const Modal = {
 
 document.getElementById("modal-overlay").addEventListener("click", (e) => {
   if (window._opmlImporting) return;
+  // A freshly generated API key is shown exactly once — a stray click outside
+  // the dialog must not be what loses it.
+  if (window._apiKeyShowing) return;
   if (e.target === document.getElementById("modal-overlay")) Modal.close();
 });
 
@@ -312,6 +315,35 @@ document.addEventListener("click", (e) => {
     _secDoDisable();
     return;
   }
+
+  // ── External API keys ─────────────────────────────────────
+  if (action === "api-key-generate") { _apiKeyGenerate(); return; }
+  if (action === "api-key-create")   { _apiKeyCreate(); return; }
+  if (action === "api-key-copy")     { _apiKeyCopy(el); return; }
+  if (action === "api-key-done") {
+    window._apiKeyShowing = false;
+    Modal.close();
+    return;
+  }
+  if (action === "api-key-revoke") {
+    _apiKeyRevoke(Number(el.dataset.keyId), el.dataset.keyName);
+    return;
+  }
+  if (action === "api-key-do-revoke") {
+    Modal.close();
+    _apiKeyDoRevoke(Number(el.dataset.keyId));
+    return;
+  }
+  if (action === "api-key-rename") {
+    _apiKeyRename(Number(el.dataset.keyId), el.dataset.keyName || "");
+    return;
+  }
+  if (action === "api-key-do-rename") {
+    _apiKeyDoRename(Number(el.dataset.keyId));
+    return;
+  }
+  if (action === "api-key-purge-unused") { _apiKeyPurgeUnused(); return; }
+  if (action === "api-key-do-purge")     { _apiKeyDoPurge();     return; }
   if (action === "settings-stay") {
     Modal.close();
     window._settingsPendingNav = null;

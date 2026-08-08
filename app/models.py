@@ -66,6 +66,10 @@ class GlobalSettings(Base):
     # Max RSS entries to inspect on non-initial syncs (0 = unlimited); prevents crawling
     # deep backlogs on every scheduled sync.  Does not apply to initial syncs or XML imports.
     sync_lookback_limit = Column(Integer, default=50)
+    # External API master switch. When False every API key is rejected, including
+    # the ones native clients hold. On by default: with no keys issued it grants
+    # nobody anything, and it keeps native clients able to enrol themselves.
+    api_enabled = Column(Boolean, default=True)
 
 
 class AuthSession(Base):
@@ -75,6 +79,20 @@ class AuthSession(Base):
     token = Column(String, nullable=False, unique=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     expires_at = Column(DateTime, nullable=False)
+    last_used_at = Column(DateTime, nullable=True)
+
+
+class ApiKey(Base):
+    __tablename__ = "api_keys"
+
+    id = Column(Integer, primary_key=True, index=True)
+    # User-supplied label so keys can be told apart in the settings list
+    name = Column(String, nullable=False)
+    # SHA-256 of the key. The plaintext is shown once at creation and never stored.
+    key_hash = Column(String, nullable=False, unique=True, index=True)
+    # Leading characters of the key, kept so the list can identify it without the secret
+    key_prefix = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
     last_used_at = Column(DateTime, nullable=True)
 
 

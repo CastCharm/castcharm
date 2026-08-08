@@ -6,8 +6,9 @@
 
 const _setupState = {
   step: 1,
-  totalSteps: 5,
+  totalSteps: 6,
   enableAuth: false,
+  apiEnabled: true,
   username: "",
   password: "",
   confirmPassword: "",
@@ -88,12 +89,17 @@ function _renderSetupStep() {
 }
 
 function _stepBody(step) {
+  // Order: Login → Theme → Timezone → Storage → File options → External API.
+  // External API is intentionally last: it's the only step that most first-time
+  // users will neither understand nor need on day one, so we let them get
+  // through the "make it look and behave right" decisions first.
   switch (step) {
     case 1: return _stepLogin();
     case 2: return _stepTheme();
     case 3: return _stepTimezone();
     case 4: return _stepStorage();
     case 5: return _stepFileOptions();
+    case 6: return _stepExternalApi();
     default: return "";
   }
 }
@@ -126,7 +132,40 @@ function _stepLogin() {
     </div>`;
 }
 
-// ── Step 2: Theme ──────────────────────────────────────────────────────────
+// ── Step 2: External API ───────────────────────────────────────────────────
+
+function _stepExternalApi() {
+  return `
+    <h2 class="wiz-title">External API access</h2>
+    <p class="wiz-desc">
+      CastCharm has a full REST API — the same one this web interface runs on.
+      Leaving this on lets the Android app and any scripts you write connect to
+      your server. If you only use the web interface, you can leave this off.
+    </p>
+    <p class="wiz-desc" style="color:var(--text-3);font-size:12.5px">
+      Nothing can actually connect until you generate a key for it (Settings →
+      External API), and you can turn this switch on or off later at any time.
+    </p>
+    <form id="wiz-api-form">
+      ${toggle("Enable external API access", "api_enabled",
+        _setupState.apiEnabled,
+        "You can generate and revoke keys any time from Settings → External API.")}
+    </form>
+    ${_setupState.enableAuth ? `
+      <p class="wiz-desc">
+        With login enabled, a key will be the way you sign in from the Android
+        app or scripts. Each device gets its own so you can revoke one without
+        disturbing the rest.
+      </p>
+    ` : `
+      <p class="wiz-desc" style="color:var(--warning)">
+        ⚠ You skipped the login step, so this instance is already reachable by
+        anyone who can connect to it. This setting doesn't change that.
+      </p>
+    `}`;
+}
+
+// ── Step 3: Theme ──────────────────────────────────────────────────────────
 
 function _stepTheme() {
   const buttons = Object.entries(THEMES).map(([id, t]) => {
@@ -156,7 +195,7 @@ window._wizardSelectTheme = function(name) {
   });
 };
 
-// ── Step 3: Timezone ───────────────────────────────────────────────────────
+// ── Step 4: Timezone ───────────────────────────────────────────────────────
 
 function _stepTimezone() {
   return `
@@ -205,7 +244,7 @@ async function _initTimezoneStep() {
   }
 }
 
-// ── Step 4: Storage ────────────────────────────────────────────────────────
+// ── Step 5: Storage ────────────────────────────────────────────────────────
 
 function _stepStorage() {
   return `
@@ -258,7 +297,7 @@ window._loadDirBrowser = async function(path) {
   }
 };
 
-// ── Step 4: File options ───────────────────────────────────────────────────
+// ── Step 6: File options ───────────────────────────────────────────────────
 
 function _stepFileOptions() {
   return `
@@ -344,6 +383,12 @@ async function _wizardNext() {
       _setupState.organizeByYear        = raw.organize_by_year        ?? true;
       _setupState.saveXml               = raw.save_xml                ?? true;
     }
+  }
+
+  if (_setupState.step === 6) {
+    // External API is the final step — capture the toggle then submit.
+    const apiForm = document.getElementById("wiz-api-form");
+    if (apiForm) _setupState.apiEnabled = collectForm(apiForm).api_enabled ?? true;
 
     const btn = document.getElementById("wiz-next");
     btn.disabled    = true;
@@ -361,6 +406,7 @@ async function _wizardNext() {
         filename_episode_number: _setupState.filenameEpisodeNumber,
         organize_by_year:        _setupState.organizeByYear,
         save_xml:                _setupState.saveXml,
+        api_enabled:             _setupState.apiEnabled,
       });
       localStorage.setItem("cc_theme", _setupState.theme);
       applyTheme(_setupState.theme);
