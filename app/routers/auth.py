@@ -1,5 +1,6 @@
 """Authentication and first-run setup endpoints."""
 import logging
+import os
 from typing import Optional
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
@@ -10,9 +11,9 @@ from sqlalchemy.orm import Session
 from app.auth import (
     COOKIE_NAME,
     SESSION_LIFETIME,
-    SECURE_COOKIES,
     check_rate_limit,
     clear_failures,
+    cookie_secure_for,
     create_session,
     delete_session,
     extract_api_key,
@@ -37,9 +38,8 @@ router = APIRouter(tags=["auth"])
 # The default covers a proxy running on the same host; CASTCHARM_TRUSTED_PROXIES
 # accepts a comma-separated list of additional IPs for container-network setups
 # where Traefik / nginx runs in its own container with a different address.
-import os as _os
 _extra_proxies = {
-    p.strip() for p in _os.environ.get("CASTCHARM_TRUSTED_PROXIES", "").split(",") if p.strip()
+    p.strip() for p in os.environ.get("CASTCHARM_TRUSTED_PROXIES", "").split(",") if p.strip()
 }
 _TRUSTED_PROXY_IPS = frozenset({"127.0.0.1", "::1"} | _extra_proxies)
 if _extra_proxies:
@@ -198,7 +198,7 @@ def login(
         max_age=int(SESSION_LIFETIME.total_seconds()),
         httponly=True,
         samesite="strict",
-        secure=SECURE_COOKIES,
+        secure=cookie_secure_for(request),
         path="/",
     )
     log.info("Login successful for user '%s' from %s", body.username, ip)
@@ -338,6 +338,7 @@ def exchange_session_for_key(
 @router.post("/api/setup/complete")
 def complete_setup(
     body: SetupCompleteRequest,
+    request: Request,
     response: Response,
     db: Session = Depends(get_db),
 ):
@@ -391,6 +392,7 @@ def complete_setup(
             max_age=int(SESSION_LIFETIME.total_seconds()),
             httponly=True,
             samesite="strict",
+            secure=cookie_secure_for(request),
             path="/",
         )
 

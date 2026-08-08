@@ -50,13 +50,27 @@
       <h2>What the app does</h2>
       <ul>
         <li>Connects to a CastCharm server using the server address you provide</li>
-        <li>Uses the server's existing login when authentication is enabled</li>
+        <li>Signs in once with your server's username and password, then stays connected using a per-device key that the server issues automatically</li>
         <li>Shows your podcasts, recent episodes, downloaded episodes, and episodes in progress</li>
         <li>Streams episodes from your CastCharm server</li>
         <li>Downloads episodes to the device for offline listening</li>
         <li>Saves playback position and played status back to your server when online</li>
         <li>Keeps local playback changes for later sync when the server is unavailable</li>
       </ul>
+
+      <h2>Signing in</h2>
+      <p>
+        The first time you open the app, enter your server's address (e.g.
+        <code>http://192.168.1.100:8000</code>) and tap <strong>Connect</strong>. The app
+        will check the server — if a password is required, it'll ask for your username and
+        password next. If your server has no password, you're done in one step.
+      </p>
+      <p>
+        Once you're signed in, the app doesn't need to ask again. If you want to remove
+        this device from the server later, use <strong>Change server</strong> in Settings
+        (which also revokes the key from the server) or revoke the key manually from the
+        server's <strong>Settings → External API</strong> panel.
+      </p>
 
       <h2>Playback</h2>
       <p>

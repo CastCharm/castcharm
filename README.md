@@ -44,7 +44,7 @@ Open **http://localhost:8000** — the setup wizard will guide you through initi
 
 ## Configuration
 
-All configuration is done via environment variables (or a `.env` file next to `docker-compose.yml`).
+All configuration is done via environment variables (or a `.env` file next to `docker-compose.yml`). Most people only need these three:
 
 | Variable | Default | Description |
 |---|---|---|
@@ -54,9 +54,22 @@ All configuration is done via environment variables (or a `.env` file next to `d
 
 The `DATABASE_URL`, `DEFAULT_DOWNLOAD_PATH`, and `CLEAN_RSS_PATH` variables inside the container are set automatically by `docker-compose.yml` and don't normally need to be changed.
 
+### Advanced options
+
+Skip this unless you're running behind a reverse proxy in another container or building your own image.
+
+| Variable | Default | Description |
+|---|---|---|
+| `CASTCHARM_TRUSTED_PROXIES` | *(empty)* | Comma-separated IPs allowed to set `X-Forwarded-For`. `127.0.0.1` and `::1` are trusted by default, so a proxy on the same host needs no change. Add your proxy's container IP if it runs separately, otherwise the login rate-limit lumps every failed attempt together under the proxy's address. |
+| `APP_VERSION` | `dev` | Version string reported by `/api/status` and shown in the API docs. Set automatically by official container images. |
+
+The login cookie's `Secure` flag is set automatically based on whether the current request came in over HTTPS — no configuration needed for either plain-HTTP or HTTPS deployments.
+
 ### Running behind a reverse proxy
 
-The default `CMD` includes `--proxy-headers` so `X-Forwarded-*` headers from nginx/Caddy/Traefik are trusted. No extra configuration needed.
+CastCharm works behind nginx, Caddy, Traefik, or any other reverse proxy. If your proxy runs on the same host as CastCharm (the usual setup), no configuration is needed.
+
+If your proxy runs in a *separate container* and you want the login rate-limit to see the real client IP instead of the proxy's, set `CASTCHARM_TRUSTED_PROXIES` to the proxy's container IP.
 
 ---
 

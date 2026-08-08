@@ -7,7 +7,6 @@ constant and salting is automatic.
 """
 import hashlib
 import logging
-import os
 import secrets
 from datetime import datetime, timedelta
 from typing import Optional
@@ -23,9 +22,21 @@ _pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 COOKIE_NAME = "cc_session"
 SESSION_LIFETIME = timedelta(days=30)
-# Set CASTCHARM_SECURE_COOKIES=1 in production when serving over HTTPS.
-# Defaults to False so HTTP-only home-network deployments work out of the box.
-SECURE_COOKIES = os.getenv("CASTCHARM_SECURE_COOKIES", "0").strip() in ("1", "true", "yes")
+
+
+def cookie_secure_for(request) -> bool:
+    """Return True when the session cookie should be marked Secure.
+
+    Decided per request: if the client reached us over HTTPS, the cookie is
+    Secure (the browser then refuses to leak it back over plain HTTP). If the
+    request came in over plain HTTP — the common home-LAN case — the flag is
+    off so the browser will actually store and send the cookie.
+
+    Uvicorn is launched with --proxy-headers, so request.url.scheme reflects
+    X-Forwarded-Proto when CastCharm sits behind a reverse proxy that
+    terminates TLS. No configuration required either way.
+    """
+    return request.url.scheme == "https"
 
 # ── Rate limiting ──────────────────────────────────────────────────────────────
 # Simple in-memory counter per remote IP. Resets on restart — acceptable for a
