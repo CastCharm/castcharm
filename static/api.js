@@ -76,6 +76,8 @@ const API = {
   getApiKeys:   ()     => API.get("/api/settings/api-keys"),
   createApiKey: (name) => API.post("/api/settings/api-keys", { name }),
   revokeApiKey: (id)   => API.delete(`/api/settings/api-keys/${id}`),
+  renameApiKey: (id, name) => API.request("PATCH", `/api/settings/api-keys/${id}`, { name }),
+  purgeUnusedApiKeys: (days = 30) => API.post(`/api/settings/api-keys/purge-unused?days=${days}`, {}),
 
   // ── Feeds ────────────────────────────────────────────────────
   getFeeds:     () =>         API.get("/api/feeds"),
@@ -186,8 +188,12 @@ const API = {
     return j;
   },
   logout: () => API.post("/api/auth/logout"),
-  updateCredentials: (current_password, new_username, new_password) =>
-    API.put("/api/auth/credentials", { current_password, new_username, new_password }),
+  updateCredentials: (current_password, new_username, new_password, extras = {}) =>
+    API.put("/api/auth/credentials", {
+      current_password, new_username, new_password,
+      revoke_other_sessions: !!extras.revoke_other_sessions,
+      revoke_all_api_keys:   !!extras.revoke_all_api_keys,
+    }),
   disableAuth: () => API.post("/api/auth/disable"),
   completeSetup: (body) => API.post("/api/setup/complete", body),
   browseDirs: (path) => API.get(`/api/system/browse-dirs?path=${encodeURIComponent(path)}`),

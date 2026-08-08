@@ -84,18 +84,22 @@ function _renderSetupStep() {
   document.getElementById("wiz-back")?.addEventListener("click", _wizardBack);
 
   if (s.step === 1) _initLoginStep();
-  if (s.step === 4) _initTimezoneStep();
-  if (s.step === 5) _loadDirBrowser(s.downloadPath);
+  if (s.step === 3) _initTimezoneStep();
+  if (s.step === 4) _loadDirBrowser(s.downloadPath);
 }
 
 function _stepBody(step) {
+  // Order: Login → Theme → Timezone → Storage → File options → External API.
+  // External API is intentionally last: it's the only step that most first-time
+  // users will neither understand nor need on day one, so we let them get
+  // through the "make it look and behave right" decisions first.
   switch (step) {
     case 1: return _stepLogin();
-    case 2: return _stepExternalApi();
-    case 3: return _stepTheme();
-    case 4: return _stepTimezone();
-    case 5: return _stepStorage();
-    case 6: return _stepFileOptions();
+    case 2: return _stepTheme();
+    case 3: return _stepTimezone();
+    case 4: return _stepStorage();
+    case 5: return _stepFileOptions();
+    case 6: return _stepExternalApi();
     default: return "";
   }
 }
@@ -136,17 +140,22 @@ function _stepExternalApi() {
     <p class="wiz-desc">
       CastCharm has a full REST API — the same one this web interface runs on.
       Leaving this on lets the Android app and any scripts you write connect to
-      your server. Nothing can actually connect until you generate a key for it.
+      your server. If you only use the web interface, you can leave this off.
+    </p>
+    <p class="wiz-desc" style="color:var(--text-3);font-size:12.5px">
+      Nothing can actually connect until you generate a key for it (Settings →
+      External API), and you can turn this switch on or off later at any time.
     </p>
     <form id="wiz-api-form">
       ${toggle("Enable external API access", "api_enabled",
         _setupState.apiEnabled,
-        "Change this any time in Settings → External API, which is also where you generate and revoke keys.")}
+        "You can generate and revoke keys any time from Settings → External API.")}
     </form>
     ${_setupState.enableAuth ? `
       <p class="wiz-desc">
-        You've set up a login, so a key will be the only other way in. Give each
-        device its own, and you can revoke one without disturbing the rest.
+        With login enabled, a key will be the way you sign in from the Android
+        app or scripts. Each device gets its own so you can revoke one without
+        disturbing the rest.
       </p>
     ` : `
       <p class="wiz-desc" style="color:var(--warning)">
@@ -361,16 +370,11 @@ async function _wizardNext() {
     }
   }
 
-  if (_setupState.step === 2) {
-    const apiForm = document.getElementById("wiz-api-form");
-    if (apiForm) _setupState.apiEnabled = collectForm(apiForm).api_enabled ?? true;
-  }
-
-  if (_setupState.step === 5) {
+  if (_setupState.step === 4) {
     _setupState.downloadPath = (document.getElementById("wiz-dl-path")?.value || "/downloads").trim();
   }
 
-  if (_setupState.step === 6) {
+  if (_setupState.step === 5) {
     const form = document.getElementById("wiz-file-form");
     if (form) {
       const raw = collectForm(form);
@@ -379,6 +383,12 @@ async function _wizardNext() {
       _setupState.organizeByYear        = raw.organize_by_year        ?? true;
       _setupState.saveXml               = raw.save_xml                ?? true;
     }
+  }
+
+  if (_setupState.step === 6) {
+    // External API is the final step — capture the toggle then submit.
+    const apiForm = document.getElementById("wiz-api-form");
+    if (apiForm) _setupState.apiEnabled = collectForm(apiForm).api_enabled ?? true;
 
     const btn = document.getElementById("wiz-next");
     btn.disabled    = true;

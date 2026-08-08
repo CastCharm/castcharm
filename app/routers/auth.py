@@ -33,8 +33,17 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["auth"])
 
-# IPs from which X-Forwarded-For is trusted (loopback = same-host reverse proxy)
-_TRUSTED_PROXY_IPS = frozenset({"127.0.0.1", "::1"})
+# IPs from which X-Forwarded-For is trusted (loopback = same-host reverse proxy).
+# The default covers a proxy running on the same host; CASTCHARM_TRUSTED_PROXIES
+# accepts a comma-separated list of additional IPs for container-network setups
+# where Traefik / nginx runs in its own container with a different address.
+import os as _os
+_extra_proxies = {
+    p.strip() for p in _os.environ.get("CASTCHARM_TRUSTED_PROXIES", "").split(",") if p.strip()
+}
+_TRUSTED_PROXY_IPS = frozenset({"127.0.0.1", "::1"} | _extra_proxies)
+if _extra_proxies:
+    log.info("Trusting X-Forwarded-For from additional proxies: %s", sorted(_extra_proxies))
 
 
 def _get_client_ip(request: Request) -> str:
@@ -64,6 +73,15 @@ class CredentialsUpdate(BaseModel):
     current_password: str
     new_username: str
     new_password: str
+    # When True, delete every AuthSession row *except* the one the caller is
+    # holding. Used for the "sign out other browser sessions" checkbox on the
+    # Security panel — a natural expectation when changing the password because
+    # of a suspected compromise.
+    revoke_other_sessions: bool = False
+    # When True, delete every ApiKey row so no Android/script credential
+    # survives the password change. Also lets the user roll their keys wholesale
+    # without visiting the External API panel.
+    revoke_all_api_keys: bool = False
 
     @field_validator("new_password")
     @classmethod
@@ -206,8 +224,15 @@ def update_credentials(
     db: Session = Depends(get_db),
     cc_session: Optional[str] = Cookie(default=None),
 ):
-    """Update username and password. Requires current password to confirm identity."""
-    from app.models import GlobalSettings
+    """Update username and password. Requires current password to confirm identity.
+
+    Two optional flags let the caller nuke ambient credentials in the same
+    request — natural if they're changing password because of a suspected
+    compromise:
+      revoke_other_sessions — deletes every AuthSession except the caller's
+      revoke_all_api_keys   — deletes every ApiKey (every device must re-enrol)
+    """
+    from app.models import AuthSession, ApiKey, GlobalSettings
     gs = db.query(GlobalSettings).first()
     if not gs:
         raise HTTPException(status_code=404, detail="Settings not found")
@@ -222,9 +247,24 @@ def update_credentials(
     gs.auth_username = body.new_username
     gs.auth_password_hash = hash_password(body.new_password)
     gs.auth_enabled = True
+
+    revoked_sessions = 0
+    if body.revoke_other_sessions:
+        q = db.query(AuthSession)
+        if cc_session:
+            q = q.filter(AuthSession.token != cc_session)
+        revoked_sessions = q.delete(synchronize_session=False)
+
+    revoked_keys = 0
+    if body.revoke_all_api_keys:
+        revoked_keys = db.query(ApiKey).delete(synchronize_session=False)
+
     db.commit()
-    log.info("Credentials updated for user '%s'", body.new_username)
-    return {"ok": True}
+    log.info(
+        "Credentials updated for user '%s' (revoked_sessions=%d, revoked_keys=%d)",
+        body.new_username, revoked_sessions, revoked_keys,
+    )
+    return {"ok": True, "revoked_sessions": revoked_sessions, "revoked_keys": revoked_keys}
 
 
 @router.post("/api/auth/disable")

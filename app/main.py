@@ -133,6 +133,33 @@ app = FastAPI(
     openapi_url="/api/openapi.json",
 )
 
+
+# Register the API-key auth methods in the OpenAPI schema so the "Authorize"
+# button appears in Swagger UI. Without this, users testing endpoints from
+# /api/docs can only authenticate as their current browser session — there is
+# no way to try a specific key.
+def _custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    from fastapi.openapi.utils import get_openapi
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+    schema.setdefault("components", {})["securitySchemes"] = {
+        "APIKeyHeader": {"type": "apiKey", "in": "header", "name": "X-API-Key"},
+        "BearerAuth": {"type": "http", "scheme": "bearer"},
+    }
+    # Applied globally — every endpoint accepts either scheme. The browser
+    # cookie still works for callers with a session, so this is additive.
+    schema["security"] = [{"APIKeyHeader": []}, {"BearerAuth": []}]
+    app.openapi_schema = schema
+    return schema
+
+app.openapi = _custom_openapi
+
 @app.get("/api/docs", include_in_schema=False)
 async def swagger_ui():
     # ?v=<version> matches what index.html does for its assets. Static files are
@@ -229,8 +256,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
         db = SessionLocal()
         try:
             from app.auth import (
-                COOKIE_NAME, extract_api_key, is_api_enabled,
-                is_auth_required, validate_api_key, validate_session,
+                API_KEY_FAILURE_LOG_THRESHOLD, COOKIE_NAME, extract_api_key,
+                is_api_enabled, is_auth_required, record_api_key_failure,
+                validate_api_key, validate_session,
             )
 
             # API keys are checked before the session so that last_used_at is
@@ -244,7 +272,21 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     request.state.auth_method = "api_key"
                     request.state.api_key_id = key_id
                     return await call_next(request)
-                log.warning("Rejected API key for %s", path)
+                # Throttle the log — a hostile scanner cycling through guesses
+                # would otherwise emit a WARNING per request. First N failures
+                # in the window log at WARNING; the rest drop to DEBUG so the
+                # signal survives without drowning the log file.
+                client_host = request.client.host if request.client else "unknown"
+                count = record_api_key_failure(client_host)
+                if count <= API_KEY_FAILURE_LOG_THRESHOLD:
+                    log.warning("Rejected API key for %s from %s", path, client_host)
+                elif count == API_KEY_FAILURE_LOG_THRESHOLD + 1:
+                    log.warning(
+                        "Suppressing further bad-key warnings for %s (>%d in window)",
+                        client_host, API_KEY_FAILURE_LOG_THRESHOLD,
+                    )
+                else:
+                    log.debug("Rejected API key for %s from %s (throttled)", path, client_host)
                 # Fall through: a bad key is treated as no key, so an instance
                 # with login disabled stays as open as it was before.
 
@@ -283,9 +325,40 @@ app.include_router(player_router)
 
 
 @app.get("/api/status", response_model=StatusOut, tags=["system"])
-def get_status():
+def get_status(request: StarletteRequest):
     db = SessionLocal()
     try:
+        # /api/status is auth-exempt so the SPA can render before login and the
+        # setup wizard can poll it. On a locked-down instance we don't want an
+        # unauthenticated caller to fingerprint library size, so return only
+        # the fields the login screen actually needs.
+        from app.auth import (
+            COOKIE_NAME, extract_api_key, is_api_enabled,
+            is_auth_required, validate_api_key, validate_session,
+        )
+        authenticated = not is_auth_required(db)
+        if not authenticated:
+            api_key = extract_api_key(request)
+            if api_key and is_api_enabled(db) and validate_api_key(api_key, db) is not None:
+                authenticated = True
+            else:
+                token = request.cookies.get(COOKIE_NAME)
+                if token and validate_session(token, db):
+                    authenticated = True
+        if not authenticated:
+            return StatusOut(
+                scheduler_running=is_running(),
+                download_queue_size=0,
+                active_downloads=0,
+                podcasts_total=0,
+                feeds_total=0,
+                episodes_total=0,
+                episodes_downloaded=0,
+                episodes_failed=0,
+                storage_bytes=0,
+                version=APP_VERSION,
+            )
+
         podcasts_total = db.query(func.count(Feed.id)).filter(Feed.primary_feed_id.is_(None)).scalar() or 0
         feeds_total = db.query(func.count(Feed.id)).scalar() or 0
         episodes_total = db.query(func.count(Episode.id)).scalar() or 0

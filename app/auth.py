@@ -34,6 +34,12 @@ _FAILURE_WINDOW = timedelta(minutes=5)
 _MAX_FAILURES = 10
 _failure_log: dict[str, list[datetime]] = {}
 
+# Separate tracker for bad API-key attempts. Keys are 256-bit random so brute
+# force is not the real risk — the goal here is to stop a hostile scanner from
+# filling the log with a WARNING per rejected key.
+API_KEY_FAILURE_LOG_THRESHOLD = 10
+_api_key_failure_log: dict[str, list[datetime]] = {}
+
 
 def check_rate_limit(ip: str) -> bool:
     """Return False (and prune stale entries) if this IP is over the limit."""
@@ -61,6 +67,20 @@ def remaining_attempts(ip: str) -> int:
 
 def clear_failures(ip: str) -> None:
     _failure_log.pop(ip, None)
+
+
+def record_api_key_failure(ip: str) -> int:
+    """Record a bad API-key attempt and return the current count in the window.
+
+    Prunes stale entries in the same call so the map cannot grow forever from
+    a scanner cycling through source IPs.
+    """
+    now = datetime.utcnow()
+    cutoff = now - _FAILURE_WINDOW
+    times = [t for t in _api_key_failure_log.get(ip, []) if t > cutoff]
+    times.append(now)
+    _api_key_failure_log[ip] = times
+    return len(times)
 
 
 # ── Password helpers ───────────────────────────────────────────────────────────

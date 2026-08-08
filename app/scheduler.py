@@ -21,6 +21,7 @@ def start_scheduler():
         schedule_opml_export()
         schedule_daily_sync()  # may remove per-feed jobs if daily mode is active
         schedule_autoclean()
+        schedule_auth_cleanup()
 
 
 def stop_scheduler():
@@ -458,3 +459,53 @@ def get_syncing_count() -> int:
     """Return number of currently running feed sync jobs (from activity tracker)."""
     from app.activity import get_syncing_count as _get
     return _get()
+
+
+# ---------------------------------------------------------------------------
+# Auth maintenance
+# ---------------------------------------------------------------------------
+
+def _auth_cleanup_job():
+    """Daily pruning of expired sessions and never-used API keys.
+
+    Both piles grow silently in normal use — expired sessions accumulate until
+    validate_session happens to touch them, and unused API keys pile up when a
+    client's enrolment response is lost or the app is uninstalled without a
+    logout. Running once a day keeps both tables trimmed without any user
+    action.
+    """
+    from datetime import timedelta
+    from app.auth import cleanup_expired_sessions
+    from app.database import SessionLocal
+    from app.models import ApiKey
+    db = SessionLocal()
+    try:
+        cleanup_expired_sessions(db)
+        # Only touch keys that have never been used AND are more than a week
+        # old. A key created seconds ago that hasn't yet had a request is
+        # normal; a week-old never-used key is almost certainly an orphan from
+        # a failed enrolment.
+        cutoff = datetime.utcnow() - timedelta(days=7)
+        removed = db.query(ApiKey).filter(
+            ApiKey.last_used_at.is_(None),
+            ApiKey.created_at < cutoff,
+        ).delete(synchronize_session=False)
+        db.commit()
+        if removed:
+            log.info("Auth cleanup removed %d never-used API key(s)", removed)
+    finally:
+        db.close()
+
+
+def schedule_auth_cleanup():
+    """Run auth-table cleanup daily at 03:15 UTC (well outside likely user hours)."""
+    job_id = "auth_cleanup"
+    if _scheduler.get_job(job_id):
+        _scheduler.remove_job(job_id)
+    _scheduler.add_job(
+        _auth_cleanup_job,
+        trigger=CronTrigger(hour=3, minute=15),
+        id=job_id,
+        replace_existing=True,
+    )
+    log.info("Scheduled daily auth cleanup at 03:15 UTC")

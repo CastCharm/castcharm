@@ -412,6 +412,28 @@ async function viewSettings() {
                 <input class="form-control" id="sec-confirm-pw" type="password"
                        autocomplete="new-password" style="max-width:300px" />
               </div>
+              <div class="form-group" style="max-width:520px">
+                <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;color:var(--text-2);font-size:13px">
+                  <input type="checkbox" id="sec-revoke-sessions" checked
+                         style="margin-top:3px;flex-shrink:0" />
+                  <span>
+                    <strong style="color:var(--text)">Sign out other browser sessions</strong><br>
+                    <span style="color:var(--text-3);font-size:12px">
+                      Recommended if you're changing this because you think your password was seen or shared.
+                    </span>
+                  </span>
+                </label>
+                <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;color:var(--text-2);font-size:13px;margin-top:8px">
+                  <input type="checkbox" id="sec-revoke-keys"
+                         style="margin-top:3px;flex-shrink:0" />
+                  <span>
+                    <strong style="color:var(--text)">Revoke all API keys</strong><br>
+                    <span style="color:var(--text-3);font-size:12px">
+                      Every device or script using a key stops working immediately and must be re-enrolled.
+                    </span>
+                  </span>
+                </label>
+              </div>
               <div style="display:flex;gap:8px;flex-wrap:wrap">
                 <button type="button" class="btn btn-primary" data-action="sec-update-credentials">
                   Update Credentials
@@ -494,10 +516,17 @@ async function viewSettings() {
               ${_apiKeyList(apiKeys)}
             </div>
 
-            <button type="button" class="btn btn-ghost btn-sm" data-action="api-key-generate">
-              ${svg('<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>')}
-              Generate new key
-            </button>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button type="button" class="btn btn-ghost btn-sm" data-action="api-key-generate">
+                ${svg('<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>')}
+                Generate new key
+              </button>
+              <button type="button" class="btn btn-ghost btn-sm" data-action="api-key-purge-unused"
+                      title="Revoke keys that have never been used, or haven't been used in a while">
+                ${svg('<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/>')}
+                Revoke unused
+              </button>
+            </div>
           </div>
         </div>
 
@@ -676,15 +705,31 @@ window._secUpdateCredentials = async function() {
   const newUser = (document.getElementById("sec-new-user")?.value || "").trim();
   const newPw = document.getElementById("sec-new-pw")?.value || "";
   const confirmPw = document.getElementById("sec-confirm-pw")?.value || "";
+  const revokeSessions = !!document.getElementById("sec-revoke-sessions")?.checked;
+  const revokeKeys = !!document.getElementById("sec-revoke-keys")?.checked;
   if (!newUser) { Toast.error("Username is required"); return; }
   if (newPw.length < 8) { Toast.error("Password must be at least 8 characters"); return; }
   if (newPw !== confirmPw) { Toast.error("Passwords do not match"); return; }
   try {
-    await API.updateCredentials(currentPw, newUser, newPw);
-    Toast.success("Credentials updated");
+    const res = await API.updateCredentials(currentPw, newUser, newPw, {
+      revoke_other_sessions: revokeSessions,
+      revoke_all_api_keys:   revokeKeys,
+    });
+    // Compose a message that reflects what actually happened server-side so
+    // the user knows their choices took effect.
+    const parts = ["Credentials updated"];
+    if (res.revoked_sessions > 0) {
+      parts.push(`${res.revoked_sessions} other session${res.revoked_sessions !== 1 ? "s" : ""} signed out`);
+    }
+    if (res.revoked_keys > 0) {
+      parts.push(`${res.revoked_keys} API key${res.revoked_keys !== 1 ? "s" : ""} revoked`);
+    }
+    Toast.success(parts.join(" · "));
     document.getElementById("sec-current-pw").value = "";
     document.getElementById("sec-new-pw").value = "";
     document.getElementById("sec-confirm-pw").value = "";
+    // If keys were revoked, the External API panel below is now stale — re-render.
+    if (res.revoked_keys > 0) viewSettings();
   } catch (err) { Toast.error(err.message); }
 };
 
@@ -727,6 +772,32 @@ window._secDoDisable = async function() {
 
 // ── External API key helpers ─────────────────────────────────────────────────
 
+// Age (in days) beyond which a never-used key is considered orphaned. Matches
+// the scheduled auth-cleanup threshold on the server so the UI and background
+// job agree on what "orphaned" means.
+const _API_KEY_ORPHAN_DAYS = 7;
+// Days without use after which a previously active key is flagged as stale.
+const _API_KEY_STALE_DAYS = 90;
+
+function _apiKeyBadge(k) {
+  const now = Date.now();
+  const createdMs = k.created_at ? _utcDate(k.created_at)?.getTime() : null;
+  const lastUsedMs = k.last_used_at ? _utcDate(k.last_used_at)?.getTime() : null;
+  if (!lastUsedMs) {
+    // Never-used keys older than a few minutes are almost certainly enrolments
+    // that never reached the client. We only badge them once they cross the
+    // orphan threshold so a freshly-minted key doesn't flash a warning.
+    if (createdMs && (now - createdMs) > _API_KEY_ORPHAN_DAYS * 86_400_000) {
+      return `<span class="badge badge-warning" title="No client has ever used this key — likely an orphan.">Never used</span>`;
+    }
+    return "";
+  }
+  if ((now - lastUsedMs) > _API_KEY_STALE_DAYS * 86_400_000) {
+    return `<span class="badge badge-default" title="Not used in ${_API_KEY_STALE_DAYS} days — the client may be gone.">Stale</span>`;
+  }
+  return "";
+}
+
 function _apiKeyList(keys) {
   if (!keys.length) {
     return `<div class="form-hint" style="padding:4px 0">No keys yet.</div>`;
@@ -738,7 +809,16 @@ function _apiKeyList(keys) {
     <tbody>
       ${keys.map((k) => `<tr>
         <td>
-          <strong>${escHTML(k.name)}</strong><br>
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+            <strong>${escHTML(k.name)}</strong>
+            <button type="button" class="btn btn-ghost btn-sm btn-icon"
+                    style="padding:2px 4px" title="Rename"
+                    data-action="api-key-rename" data-key-id="${k.id}"
+                    data-key-name="${escHTML(k.name)}">
+              ${svg('<path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>', 'width="12" height="12"')}
+            </button>
+            ${_apiKeyBadge(k)}
+          </div>
           <span style="color:var(--text-3);font-size:11px">created ${fmt(k.created_at)}</span>
         </td>
         <td><code style="font-size:12px;color:var(--text-2)">${escHTML(k.key_prefix)}…</code></td>
@@ -816,7 +896,9 @@ window._apiKeyCreate = async function () {
 };
 
 // The server never stores the plaintext, so this modal is the only chance to
-// read it — hence the deliberately blunt copy.
+// read it — hence the deliberately blunt copy. We also proactively push the
+// value to the clipboard on open so even a user who accidentally hits Done or
+// closes the tab still has it in their paste buffer.
 function _apiKeyShowOnce(created) {
   window._apiKeyShowing = true;   // cleared by the api-key-done action
   Modal.open("API Key Created", `
@@ -829,6 +911,7 @@ function _apiKeyShowOnce(created) {
              value="${escHTML(created.key)}"
              style="font-family:monospace;font-size:12.5px" />
     </div>
+    <p id="api-key-copy-status" style="color:var(--text-3);font-size:12px;margin-bottom:6px;min-height:16px"></p>
     <p style="color:var(--text-3);font-size:12px;margin-bottom:20px">
       Send it as <code>Authorization: Bearer &lt;key&gt;</code>
       or <code>X-API-Key: &lt;key&gt;</code>.
@@ -838,9 +921,25 @@ function _apiKeyShowOnce(created) {
       <button class="btn btn-primary" data-action="api-key-done">Done</button>
     </div>
   `);
-  setTimeout(() => {
+  setTimeout(async () => {
     const el = document.getElementById("api-key-value");
     if (el) { el.focus(); el.select(); }
+    const status = document.getElementById("api-key-copy-status");
+    // Try clipboard.writeText — supported on HTTPS and localhost. On plain HTTP
+    // to a non-localhost address the browser blocks it silently; we show a
+    // hint so the user knows to hit Copy or Ctrl+C manually.
+    try {
+      await navigator.clipboard.writeText(created.key);
+      if (status) {
+        status.textContent = "✓ Copied to clipboard automatically.";
+        status.style.color = "var(--success)";
+      }
+    } catch (_) {
+      if (status) {
+        status.textContent = "Auto-copy blocked by browser — press Copy or Ctrl+C.";
+        status.style.color = "var(--warning)";
+      }
+    }
   }, 50);
 }
 
@@ -887,6 +986,72 @@ window._apiKeyDoRevoke = async function (id) {
   try {
     await API.revokeApiKey(id);
     Toast.success("Key revoked");
+    _apiKeyRefresh();
+  } catch (err) { Toast.error(err.message); }
+};
+
+// Inline rename. A small modal keeps the flow consistent with generate/revoke
+// rather than growing an in-table editable cell (which would be fiddly on
+// mobile). Server enforces name != empty.
+window._apiKeyRename = function (id, currentName) {
+  Modal.open("Rename API Key", `
+    <div class="form-group">
+      <label class="form-label">Name</label>
+      <input class="form-control" id="api-key-rename-input" type="text"
+             value="${escHTML(currentName)}" maxlength="60" />
+      <div class="form-hint">Only shown here — clients aren't affected by the name.</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" data-action="modal-close">Cancel</button>
+      <button class="btn btn-primary" data-action="api-key-do-rename" data-key-id="${id}">Save</button>
+    </div>
+  `);
+  setTimeout(() => {
+    const el = document.getElementById("api-key-rename-input");
+    if (el) { el.focus(); el.select(); }
+  }, 50);
+};
+
+window._apiKeyDoRename = async function (id) {
+  const name = (document.getElementById("api-key-rename-input")?.value || "").trim();
+  if (!name) { Toast.error("Name is required"); return; }
+  try {
+    await API.renameApiKey(id, name);
+    Toast.success("Key renamed");
+    Modal.close();
+    _apiKeyRefresh();
+  } catch (err) { Toast.error(err.message); }
+};
+
+// Purge unused keys. Default threshold matches the server's scheduled cleanup
+// so the button's effect is predictable — 30 days without use OR never used.
+window._apiKeyPurgeUnused = function () {
+  Modal.open("Revoke unused keys", `
+    <p style="color:var(--text-2);font-size:14px;margin-bottom:14px">
+      Revoke every key that has never been used, or hasn't been used in the last
+      <strong>30 days</strong>. Any device using such a key stops working and
+      would need to log in again.
+    </p>
+    <p style="color:var(--text-3);font-size:12px;margin-bottom:20px">
+      A never-used key is usually a client that was uninstalled or whose
+      enrolment response was lost. A stale key is usually a device you no longer
+      use.
+    </p>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" data-action="modal-close">Cancel</button>
+      <button class="btn btn-primary" style="background:var(--error);border-color:var(--error)"
+              data-action="api-key-do-purge">Revoke unused</button>
+    </div>
+  `);
+};
+
+window._apiKeyDoPurge = async function () {
+  try {
+    const res = await API.purgeUnusedApiKeys(30);
+    Modal.close();
+    Toast.success(res.revoked
+      ? `${res.revoked} key${res.revoked !== 1 ? "s" : ""} revoked`
+      : "No unused keys to revoke");
     _apiKeyRefresh();
   } catch (err) { Toast.error(err.message); }
 };

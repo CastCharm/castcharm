@@ -334,6 +334,16 @@ document.addEventListener("click", (e) => {
     _apiKeyDoRevoke(Number(el.dataset.keyId));
     return;
   }
+  if (action === "api-key-rename") {
+    _apiKeyRename(Number(el.dataset.keyId), el.dataset.keyName || "");
+    return;
+  }
+  if (action === "api-key-do-rename") {
+    _apiKeyDoRename(Number(el.dataset.keyId));
+    return;
+  }
+  if (action === "api-key-purge-unused") { _apiKeyPurgeUnused(); return; }
+  if (action === "api-key-do-purge")     { _apiKeyDoPurge();     return; }
   if (action === "settings-stay") {
     Modal.close();
     window._settingsPendingNav = null;

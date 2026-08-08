@@ -97,6 +97,18 @@ class ApiKeyCreate(BaseModel):
         return v
 
 
+class ApiKeyRename(BaseModel):
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def name_not_empty(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Name must not be empty")
+        return v
+
+
 class ApiKeyOut(BaseModel):
     id: int
     name: str
@@ -111,6 +123,10 @@ class ApiKeyCreated(ApiKeyOut):
     # Only the create endpoint returns this. The plaintext is never stored, so
     # this is the one and only time it can be read.
     key: str
+
+
+class ApiKeyPurgeResult(BaseModel):
+    revoked: int
 
 
 # ---------------------------------------------------------------------------
