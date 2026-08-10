@@ -167,6 +167,46 @@ def _check_title_conflict(title: str, db: Session, exclude_id: int | None = None
     return None
 
 
+def _existing_folder_conflict(
+    title: str, db: Session, feed: Feed | None = None
+) -> tuple[str, int] | None:
+    """Return (path, file_count) when a download folder for *title* already has files.
+
+    Podcast folders are named after the title, so a podcast that was removed while
+    its audio was kept leaves a folder that a later, unrelated podcast of the same
+    name would silently adopt — inheriting its files and its cover art. Detecting it
+    lets the caller ask the user instead of guessing.
+
+    Empty directories are ignored: nothing can be inherited from them, so prompting
+    would be noise.
+    """
+    from app.downloader import sanitize_filename
+
+    folder_name = sanitize_filename(title)
+    if not folder_name:
+        return None
+
+    # Honour a per-feed download_path override; otherwise the global setting. Without
+    # this, a feed filed under a custom directory would be checked against the wrong
+    # place — reporting a phantom clash, or missing a real one.
+    gs = db.query(GlobalSettings).first()
+    base_dir = (
+        (feed.download_path if feed else None)
+        or (gs.download_path if gs else None)
+        or "/downloads"
+    )
+    path = os.path.join(base_dir, folder_name)
+    if not os.path.isdir(path):
+        return None
+
+    try:
+        count = sum(len(files) for _root, _dirs, files in os.walk(path))
+    except OSError:
+        return None
+
+    return (path, count) if count > 0 else None
+
+
 @router.get("", response_model=list[FeedOut])
 def list_feeds(db: Session = Depends(get_db)):
     feeds = db.query(Feed).filter(Feed.primary_feed_id.is_(None)).order_by(Feed.title).all()
@@ -230,6 +270,33 @@ def add_feed(body: FeedCreate, background_tasks: BackgroundTasks, db: Session = 
                 status_code=409,
                 detail={"message": "A podcast with this name already exists.", "conflict_title": folder_name},
             )
+
+        # No live feed owns the name, but a folder from a previously removed podcast
+        # may still be sitting there. Adopting it silently would mix two podcasts'
+        # files together and hand the new one the old one's cover art, so ask first.
+        # conflict_title is included so existing clients route this into the same
+        # "pick another name" flow they already use for the conflict above.
+        if not body.allow_existing_folder:
+            existing_folder = _existing_folder_conflict(folder_name, db)
+            if existing_folder:
+                path, file_count = existing_folder
+                db.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": (
+                            f'A folder named "{folder_name}" already exists and contains '
+                            f'{file_count} file{"" if file_count == 1 else "s"}. It is probably '
+                            "left over from a podcast that was removed without deleting its "
+                            "files. Choose a different folder name, or use this folder anyway."
+                        ),
+                        "conflict_title": folder_name,
+                        "folder_conflict": True,
+                        "folder_path": path,
+                        "file_count": file_count,
+                    },
+                )
+
     if body.title_override:
         feed.podcast_group = body.title_override.strip()
 
@@ -250,6 +317,26 @@ def add_manual_feed(body: ManualFeedCreate, db: Session = Depends(get_db)):
     """Create a feed entry without an RSS URL (e.g. for defunct/offline podcasts)."""
     import uuid
     title = body.title.strip()
+    # Same folder guard as add_feed: a manual podcast is filed by title too, so it can
+    # land on a directory left behind by one that was removed.
+    if not body.allow_existing_folder:
+        existing_folder = _existing_folder_conflict(title, db)
+        if existing_folder:
+            path, file_count = existing_folder
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": (
+                        f'A folder named "{title}" already exists and contains '
+                        f'{file_count} file{"" if file_count == 1 else "s"}. Choose a different '
+                        "name, or use this folder anyway."
+                    ),
+                    "conflict_title": title,
+                    "folder_conflict": True,
+                    "folder_path": path,
+                    "file_count": file_count,
+                },
+            )
     conflict = _check_title_conflict(title, db)
     if conflict:
         raise HTTPException(
@@ -307,11 +394,66 @@ def update_feed(feed_id: int, body: FeedUpdate, background_tasks: BackgroundTask
         raise HTTPException(status_code=404, detail="Feed not found")
 
     updates = body.model_dump(exclude_unset=True)
+    # Not a column on Feed — must come out before the setattr loop below, which would
+    # otherwise try to assign it to the model.
+    allow_existing_folder = bool(updates.pop("allow_existing_folder", False))
+
     url_changed = False
     if "url" in updates and updates["url"]:
         updates["url"] = resolve_feed_url(updates["url"])
         if updates["url"] != feed.url:
             url_changed = True
+
+    # A folder move is driven solely by podcast_group. A title rename does NOT move
+    # the folder — the block below pins podcast_group to the old title precisely to
+    # keep the path stable — so only an explicit podcast_group change is checked.
+    #
+    # Guarded exactly like creation: refuse to point this podcast at a folder another
+    # live podcast owns, or at a directory left behind by one that was removed. Note
+    # that renaming never moves existing files, so the podcast would simply start
+    # writing into someone else's directory.
+    #
+    # Runs before any field is applied, so there is nothing to roll back on refusal.
+    if "podcast_group" in updates:
+        from app.downloader import sanitize_filename
+
+        new_folder_name = (updates["podcast_group"] or feed.title or "").strip()
+        current_folder_name = (feed.podcast_group or feed.title or "").strip()
+        moved = (
+            sanitize_filename(new_folder_name).lower()
+            != sanitize_filename(current_folder_name).lower()
+        )
+
+        if new_folder_name and moved:
+            conflict = _check_title_conflict(new_folder_name, db, exclude_id=feed.id)
+            if conflict:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "A podcast with this name already exists.",
+                        "conflict_title": new_folder_name,
+                    },
+                )
+
+            if not allow_existing_folder:
+                existing_folder = _existing_folder_conflict(new_folder_name, db, feed)
+                if existing_folder:
+                    path, file_count = existing_folder
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "message": (
+                                f'A folder named "{new_folder_name}" already exists and contains '
+                                f'{file_count} file{"" if file_count == 1 else "s"}. Renaming this '
+                                "podcast into it would mix the two together — existing files are "
+                                "not moved. Choose a different name, or use this folder anyway."
+                            ),
+                            "conflict_title": new_folder_name,
+                            "folder_conflict": True,
+                            "folder_path": path,
+                            "file_count": file_count,
+                        },
+                    )
 
     # Handle title rename: pin podcast_group to preserve folder path
     title_changed = False
@@ -415,7 +557,11 @@ def delete_feed(feed_id: int, delete_files: bool = False, force: bool = False, d
                     except OSError:
                         pass
 
-        # Remove app-generated non-audio files that the episode loop doesn't cover
+        # Remove app-generated non-audio files that the episode loop doesn't cover.
+        # Deliberately confined to the delete_files branch: cover.jpg is where
+        # upload_feed_cover() stores user-uploaded artwork, so it is not always
+        # something this app generated, and a delete that promised to keep the
+        # user's files must not quietly remove it.
         if podcast_folder and os.path.isdir(podcast_folder):
             for fname in ("cover.jpg", "complete-feed.xml", "castcharm.json"):
                 p = os.path.join(podcast_folder, fname)
@@ -1439,6 +1585,7 @@ def run_feed_autoclean(feed_id: int, db: Session = Depends(get_db)):
 async def create_feed_from_xml(
     file: UploadFile = File(...),
     title_override: Optional[str] = Form(None),
+    allow_existing_folder: bool = Form(False),
     db: Session = Depends(get_db),
 ):
     """Create a new podcast feed by uploading a local RSS/XML file.
@@ -1489,6 +1636,24 @@ async def create_feed_from_xml(
                              or (itunes_img if isinstance(itunes_img, str) else None))
 
         # Check for folder-name conflict before committing anything
+        if not allow_existing_folder:
+            existing_folder = _existing_folder_conflict(feed_title, db)
+            if existing_folder:
+                path, file_count = existing_folder
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": (
+                            f'A folder named "{feed_title}" already exists and contains '
+                            f'{file_count} file{"" if file_count == 1 else "s"}. Choose a '
+                            "different name, or use this folder anyway."
+                        ),
+                        "conflict_title": feed_title,
+                        "folder_conflict": True,
+                        "folder_path": path,
+                        "file_count": file_count,
+                    },
+                )
         conflict = _check_title_conflict(feed_title, db)
         if conflict:
             raise HTTPException(

@@ -536,7 +536,17 @@ function showAddFeedModal() {
         try { feed = await API.addFeed(url, chkDlAll.checked); }
         catch (e) {
           if (e.conflict_title != null) {
-            goTo("rss-rename", { url, downloadAll: chkDlAll.checked, conflictTitle: e.conflict_title });
+            goTo("rss-rename", {
+              url,
+              downloadAll: chkDlAll.checked,
+              conflictTitle: e.conflict_title,
+              // Present only when the clash is a leftover folder on disk rather than
+              // another live podcast — the two need different wording, and only the
+              // folder case can be resolved by using it anyway.
+              folderConflict: e.folder_conflict === true,
+              folderPath: e.folder_path || null,
+              fileCount: e.file_count || 0,
+            });
             return;
           }
           errEl.textContent = e.message; errEl.style.display = "block";
@@ -556,13 +566,22 @@ function showAddFeedModal() {
 
     // ── Step 3a: RSS folder-name conflict rename ─────────────────────────
     else if (step === "rss-rename") {
-      const { url, downloadAll, conflictTitle } = data;
-      document.getElementById("modal-title").textContent = "Name Already In Use";
+      const { url, downloadAll, conflictTitle, folderConflict, folderPath, fileCount } = data;
+      document.getElementById("modal-title").textContent =
+        folderConflict ? "Folder Already Exists" : "Name Already In Use";
+      const intro = folderConflict
+        ? `A folder named <strong>${escHTML(conflictTitle)}</strong> already exists and contains
+           <strong>${fileCount}</strong> file${fileCount === 1 ? "" : "s"}. It's most likely left
+           over from a podcast that was removed without deleting its files.<br><br>
+           Enter a different folder name for this podcast, or use the existing folder anyway
+           (its files will be mixed in with this podcast's).`
+        : `A podcast named <strong>${escHTML(conflictTitle)}</strong> already exists.
+           Enter an alternative name for the new podcast's folder:`;
       B.innerHTML = `
         <p style="color:var(--text-2);font-size:13px;margin:0 0 14px;line-height:1.5">
-          A podcast named <strong>${conflictTitle}</strong> already exists.
-          Enter an alternative name for the new podcast's folder:
+          ${intro}
         </p>
+        ${folderConflict && folderPath ? `<div class="form-hint" style="margin:-8px 0 12px;word-break:break-all">${escHTML(folderPath)}</div>` : ""}
         <div class="form-group">
           <input class="form-control" id="rss-rename-input" type="text" value="${conflictTitle}" autocomplete="off" />
           <div class="form-hint" style="margin-top:5px">This name is used as the folder name only — the podcast title from the feed is kept as-is.</div>
@@ -570,12 +589,29 @@ function showAddFeedModal() {
         <div id="rss-rename-err" style="color:var(--error);font-size:13px;display:none;margin-bottom:8px"></div>
         <div class="modal-actions">
           <button class="btn btn-ghost" id="btn-wiz-back">Back</button>
+          ${folderConflict ? `<button class="btn btn-ghost" id="btn-rss-use-folder">Use Existing Folder</button>` : ""}
           <button class="btn btn-primary" id="btn-rss-rename-confirm">Add Podcast</button>
         </div>`;
       const nameIn = B.querySelector("#rss-rename-input");
       const errEl2 = B.querySelector("#rss-rename-err");
       B.querySelector("#btn-wiz-back").addEventListener("click", () => goTo("rss"));
       nameIn.select();
+
+      // Deliberate opt-in: keep the detected name, but tell the server the existing
+      // folder is acceptable so it stops refusing.
+      B.querySelector("#btn-rss-use-folder")?.addEventListener("click", async () => {
+        const btn = B.querySelector("#btn-rss-use-folder");
+        btn.disabled = true; btn.textContent = "Adding…"; errEl2.style.display = "none";
+        let feed;
+        try { feed = await API.addFeed(url, downloadAll, null, true); }
+        catch (e) {
+          errEl2.textContent = e.message; errEl2.style.display = "block";
+          btn.disabled = false; btn.textContent = "Use Existing Folder"; return;
+        }
+        Modal.close();
+        Toast.success("Podcast added — using the existing folder");
+        await _refreshFeedsGrid();
+      });
 
       async function submitRename() {
         const altName = nameIn.value.trim();
