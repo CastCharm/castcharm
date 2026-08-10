@@ -81,7 +81,14 @@ const API = {
 
   // ── Feeds ────────────────────────────────────────────────────
   getFeeds:     () =>         API.get("/api/feeds"),
-  addFeed:         (url, downloadAll = false, titleOverride = null) => API.post("/api/feeds", { url, download_all: downloadAll, title_override: titleOverride || undefined }),
+  addFeed:         (url, downloadAll = false, titleOverride = null, allowExistingFolder = false) =>
+    API.post("/api/feeds", {
+      url,
+      download_all: downloadAll,
+      title_override: titleOverride || undefined,
+      // Only ever true after the user has been shown the folder-conflict prompt.
+      allow_existing_folder: allowExistingFolder || undefined,
+    }),
   addManualFeed:   (title) =>   API.post("/api/feeds/manual", { title }),
   createFeedFromXml: (file, titleOverride) => _upload("/api/feeds/from-xml", "file", file, titleOverride ? { title_override: titleOverride } : null),
   getFeed:      (id) =>       API.get(`/api/feeds/${id}`),

@@ -137,6 +137,10 @@ class FeedCreate(BaseModel):
     url: str
     download_all: bool = False
     title_override: Optional[str] = None
+    # Set only after the user has been shown the folder-already-exists prompt and
+    # has chosen to go ahead. Without it the add is refused with a 409 so the
+    # decision is never made on their behalf.
+    allow_existing_folder: bool = False
 
     @field_validator("url")
     @classmethod
@@ -149,6 +153,8 @@ class FeedCreate(BaseModel):
 
 class ManualFeedCreate(BaseModel):
     title: str
+    # See FeedCreate.allow_existing_folder.
+    allow_existing_folder: bool = False
 
     @field_validator("title")
     @classmethod
@@ -180,6 +186,10 @@ class FeedUpdate(BaseModel):
     autoclean_enabled: Optional[bool] = None
     autoclean_mode: Optional[str] = None
     autoclean_exclude: Optional[bool] = None
+    # Not a Feed column. Set only after the user has been shown the
+    # folder-already-exists prompt for a podcast_group rename and chosen to proceed;
+    # update_feed() pops it before applying the rest of the fields.
+    allow_existing_folder: bool = False
 
 
 class FeedOut(BaseModel):
