@@ -30,10 +30,18 @@ Router.register("/logs", viewLogs);
 // Initialize persistent audio player
 Player.init();
 
-// Called whenever an API response returns 401 (session expired, etc.)
+// Called whenever an API response returns 401 — the session is gone or was never
+// valid. Note that "you supplied the wrong password to confirm an action" is NOT
+// this: those endpoints answer 403, precisely so that mistyping a confirmation
+// does not look like a lapsed session and throw the user out.
 window._onAuthRequired = function() {
   if (typeof _statusInterval !== "undefined") clearInterval(_statusInterval);
-  showLoginOverlay();
+  // Tear down anything the interrupted screen left on top. Without this the
+  // dialog that triggered the call is still mounted underneath the login
+  // overlay, and reappears — mid-edit, with whatever was typed in it — the
+  // moment the user logs back in.
+  if (typeof Modal !== "undefined") Modal.close();
+  showLoginOverlay("Your session has expired. Please sign in again.");
 };
 
 // ── Storage helpers ───────────────────────────────────────────────────────────

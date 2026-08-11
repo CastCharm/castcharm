@@ -238,12 +238,13 @@ function _playlistFormHTML(name = "", desc = "") {
     <div style="display:flex;flex-direction:column;gap:16px">
       <div class="form-group">
         <label class="form-label">Name</label>
-        <input id="pl-name" class="form-control" placeholder="My Playlist" value="${escHTML(name)}" autofocus>
+        <input id="pl-name" class="form-control" placeholder="My Playlist" value="${escHTML(name)}"
+               maxlength="500" autofocus>
       </div>
       <div class="form-group">
         <label class="form-label">Description <span style="font-weight:400;color:var(--text-3)">(optional)</span></label>
         <textarea id="pl-desc" class="form-control" rows="3" placeholder="What's in this playlist?"
-                  style="resize:vertical">${escHTML(desc)}</textarea>
+                  maxlength="5000" style="resize:vertical">${escHTML(desc)}</textarea>
       </div>
     </div>
     <div class="modal-actions" style="margin-top:20px">

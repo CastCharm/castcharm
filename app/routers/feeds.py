@@ -1,18 +1,20 @@
 import logging
 import os
+import time
 import tempfile
 import uuid as _uuid
 from datetime import datetime
 from typing import Optional
 
 log = logging.getLogger(__name__)
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, UploadFile, File, Form
 from app.downloader import enqueue_download
 from sqlalchemy import func, text, bindparam
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import Feed, Episode, GlobalSettings
+from app.limits import MAX_IDS_IN_URL, MAX_INDEX_IDS, MAX_PAGE_SIZE
 from app.utils import get_group_feed_ids
 from app.schemas import (
     FeedCreate, FeedUpdate, FeedOut, EpisodeOut, RSSSourceInfo,
@@ -113,6 +115,40 @@ def _merge_counts(primary_id: int, sub_ids: list[int], raw: dict[int, dict]) -> 
     }
 
 
+# Whether a podcast folder holds a cover.jpg, cached by folder path.
+#
+# This is asked once per feed every time a feed list is built — which is on
+# essentially every screen — to answer a question that only changes when someone
+# uploads or deletes a cover. On a normal disk that is a cheap stat; on anything
+# slower it is not. Measured inside this project's container, where /downloads is
+# a Windows path shared into Docker, a single os.path.exists here cost ~100 ms,
+# making /api/feeds the slowest endpoint in the app by two orders of magnitude.
+#
+# The TTL is a backstop for covers that appear by some path that forgets to
+# invalidate (a file dropped into the folder by hand, say). The explicit
+# invalidation below is what keeps it correct in normal use.
+_COVER_EXISTS_CACHE: dict[str, tuple[float, bool]] = {}
+_COVER_CACHE_TTL = 60.0
+
+
+def _has_local_cover(folder: str) -> bool:
+    now = time.monotonic()
+    cached = _COVER_EXISTS_CACHE.get(folder)
+    if cached is not None and now - cached[0] < _COVER_CACHE_TTL:
+        return cached[1]
+    exists = os.path.exists(os.path.join(folder, "cover.jpg"))
+    _COVER_EXISTS_CACHE[folder] = (now, exists)
+    return exists
+
+
+def invalidate_cover_cache(folder: str | None = None) -> None:
+    """Forget cached cover state — for one folder, or all of them."""
+    if folder is None:
+        _COVER_EXISTS_CACHE.clear()
+    else:
+        _COVER_EXISTS_CACHE.pop(folder, None)
+
+
 def _feed_out(feed: Feed, db: Session, counts: dict | None = None) -> FeedOut:
     if counts is None:
         # Single-feed path: run individual queries (add_feed, get_feed, etc.)
@@ -141,7 +177,7 @@ def _feed_out(feed: Feed, db: Session, counts: dict | None = None) -> FeedOut:
         from app.downloader import get_podcast_folder
         folder = get_podcast_folder(feed, db)
         data.podcast_folder = folder
-        if not feed.custom_image_url and os.path.exists(os.path.join(folder, "cover.jpg")):
+        if not feed.custom_image_url and _has_local_cover(folder):
             data.image_url = f"/api/feeds/{feed.id}/cover.jpg"
             has_custom_cover = True
     except Exception:
@@ -563,6 +599,7 @@ def delete_feed(feed_id: int, delete_files: bool = False, force: bool = False, d
         # something this app generated, and a delete that promised to keep the
         # user's files must not quietly remove it.
         if podcast_folder and os.path.isdir(podcast_folder):
+            invalidate_cover_cache()
             for fname in ("cover.jpg", "complete-feed.xml", "castcharm.json"):
                 p = os.path.join(podcast_folder, fname)
                 if os.path.exists(p):
@@ -661,14 +698,40 @@ def clear_feed_error(feed_id: int, db: Session = Depends(get_db)):
 def get_feed_episodes(
     feed_id: int,
     include_hidden: bool = False,
-    limit: int = 200,
-    offset: int = 0,
+    limit: int = Query(200, ge=1, le=MAX_PAGE_SIZE),
+    offset: int = Query(0, ge=0),
     order: str = "desc",
+    ids: str | None = None,
     db: Session = Depends(get_db),
 ):
+    """Episodes for a feed, either a slice by offset or a specific set by id.
+
+    `ids` (comma-separated) is what a windowed client should use. Addressing rows
+    by offset requires the caller's idea of the ordering to match this endpoint's
+    exactly, which stops being true the moment the caller is working from a
+    filtered index — offset 50 of "unplayed" is not offset 50 of everything. Ids
+    say what is actually wanted, so the two can never drift.
+    """
     feed = db.query(Feed).filter(Feed.id == feed_id).first()
     if not feed:
         raise HTTPException(status_code=404, detail="Feed not found")
+
+    wanted_ids: list[int] | None = None
+    if ids is not None:
+        # Count before parsing. Checking the length of the parsed list would mean
+        # having already converted every element of whatever was sent, which makes
+        # the rejection cost scale with the size of the thing being rejected.
+        parts = [x for x in ids.split(",") if x.strip()]
+        if not parts:
+            return []
+        if len(parts) > MAX_IDS_IN_URL:
+            raise HTTPException(
+                status_code=400, detail=f"Too many ids (max {MAX_IDS_IN_URL})"
+            )
+        try:
+            wanted_ids = [int(x) for x in parts]
+        except ValueError:
+            raise HTTPException(status_code=400, detail="ids must be comma-separated integers")
 
     # Include episodes from supplementary feeds linked to this one
     all_feed_ids = get_group_feed_ids(db, feed_id)
@@ -691,7 +754,14 @@ def get_feed_episodes(
         q = q.order_by(Episode.published_at.asc().nullsfirst(), Episode.id.asc())
     else:
         q = q.order_by(Episode.published_at.desc().nullslast(), Episode.id.desc())
-    episodes = q.offset(offset).limit(limit).all()
+
+    if wanted_ids is not None:
+        # An explicit set — no window to slice. The feed/hidden filters above still
+        # apply, so this cannot be used to read episodes from another feed or to
+        # see hidden ones without asking for them.
+        episodes = q.filter(Episode.id.in_(wanted_ids)).all()
+    else:
+        episodes = q.offset(offset).limit(limit).all()
 
     # Pre-resolve effective image URL for each feed in the group (cover.jpg > custom > RSS URL)
     feed_art: dict[int, str | None] = {}
@@ -703,7 +773,7 @@ def get_feed_episodes(
             else:
                 try:
                     folder = get_podcast_folder(src, db)
-                    if folder and os.path.exists(os.path.join(folder, "cover.jpg")):
+                    if folder and _has_local_cover(folder):
                         feed_art[fid] = f"/api/feeds/{fid}/cover.jpg"
                     else:
                         feed_art[fid] = src.image_url
@@ -728,6 +798,76 @@ def get_feed_episodes(
             out.file_missing = True
         result.append(out)
     return result
+
+
+@router.get("/{feed_id}/episode-index")
+def get_feed_episode_index(
+    feed_id: int,
+    include_hidden: bool = False,
+    filter: str = "all",
+    order: str = "desc",
+    db: Session = Depends(get_db),
+):
+    """Return this feed's episode ids, in display order, and nothing else.
+
+    A client that only has /episodes cannot answer "where does episode 12345 sit
+    in this feed?" without pulling every episode above it. That is why jumping to
+    something a few hundred back used to mean fetching thousands of full episode
+    records: the app had to walk the list until the target appeared.
+
+    This is the walk, done as one indexed query. The response is just ids, so a
+    2,000-episode feed costs ~12 KB instead of several megabytes, and the caller
+    can then find any position with a local lookup and fetch only the one page it
+    actually needs to draw via /episodes?offset=.
+
+    The filter, the group expansion and the ORDER BY are kept identical to
+    get_feed_episodes above — if the two ever disagree, offsets computed from this
+    index address the wrong rows.
+    """
+    feed = db.query(Feed).filter(Feed.id == feed_id).first()
+    if not feed:
+        raise HTTPException(status_code=404, detail="Feed not found")
+
+    all_feed_ids = get_group_feed_ids(db, feed_id)
+
+    q = db.query(Episode.id).filter(
+        Episode.feed_id.in_(all_feed_ids), Episode.status != "skipped"
+    )
+    if not include_hidden:
+        q = q.filter(Episode.hidden.is_(False))
+
+    # "downloaded" is deliberately absent: on the phone that filter means "the
+    # file is on this device", which is local state the server cannot know.
+    if filter == "unplayed":
+        q = q.filter(Episode.played.is_(False))
+    elif filter == "in_progress":
+        q = q.filter(Episode.played.is_(False), Episode.play_position_seconds > 0)
+    elif filter not in ("all", ""):
+        raise HTTPException(status_code=400, detail=f"Unknown filter: {filter}")
+
+    if order == "asc":
+        q = q.order_by(Episode.published_at.asc().nullsfirst(), Episode.id.asc())
+    else:
+        q = q.order_by(Episode.published_at.desc().nullslast(), Episode.id.desc())
+
+    # Scalar id query, so the cost per episode is a single integer rather than a
+    # hydrated ORM object — which is what makes describing a whole feed in one
+    # response affordable at all. The ceiling is a backstop against a pathological
+    # feed, not a page size: a client that hits it sees a shortened feed, which is
+    # a far better failure than the server running out of memory.
+    ids = [row[0] for row in q.limit(MAX_INDEX_IDS + 1).all()]
+    truncated = len(ids) > MAX_INDEX_IDS
+    if truncated:
+        ids = ids[:MAX_INDEX_IDS]
+        log.warning(
+            "Feed %d has more than %d visible episodes; episode index truncated",
+            feed_id,
+            MAX_INDEX_IDS,
+        )
+    # total is the length of what was returned, not the feed's real size — when
+    # truncated is set, the feed has more. Named for what a caller can rely on:
+    # ids[i] is position i, and there are total of them.
+    return {"total": len(ids), "ids": ids, "truncated": truncated}
 
 
 @router.get("/{feed_id}/rss-sources", response_model=list[RSSSourceInfo])
@@ -1203,6 +1343,9 @@ async def upload_feed_cover(
             raise HTTPException(status_code=400, detail="File is not a valid image")
         with open(cover_path, "wb") as f:
             f.write(contents)
+        # The folder now has a cover that _feed_out would otherwise not notice
+        # until the TTL lapsed.
+        invalidate_cover_cache(folder)
     except HTTPException:
         raise
     except Exception as exc:
@@ -1227,6 +1370,7 @@ def delete_feed_cover(feed_id: int, db: Session = Depends(get_db)):
         cover_path = os.path.join(folder, "cover.jpg")
         if os.path.exists(cover_path):
             os.remove(cover_path)
+        invalidate_cover_cache(folder)
     except Exception:
         pass
     feed.custom_image_url = None
@@ -1716,7 +1860,15 @@ async def import_opml(
 ):
     """Import feeds from an OPML file. Returns counts of added/skipped/failed feeds."""
     import xml.etree.ElementTree as ET
-    content = await file.read()
+
+    # The other XML upload routes all cap their read; this one did not, so an
+    # upload of any size went straight into memory and then into the parser. An
+    # OPML file is a list of feed URLs — 5 MB is already an implausibly large one.
+    _OPML_MAX_BYTES = 5 * 1024 * 1024
+    content = await file.read(_OPML_MAX_BYTES + 1)
+    if len(content) > _OPML_MAX_BYTES:
+        log.warning("OPML upload rejected: file too large (>%d bytes)", _OPML_MAX_BYTES)
+        raise HTTPException(status_code=413, detail="OPML file too large (max 5 MB)")
     try:
         root = ET.fromstring(content)
     except ET.ParseError as exc:

@@ -5,7 +5,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.auth import (
@@ -64,15 +64,24 @@ class AuthStatusOut(BaseModel):
     logged_in: bool
 
 
+# Credentials are bounded because /api/auth/login is reachable without
+# authenticating. Unbounded, every attempt allocates and hashes whatever was
+# sent — up to the 50 MB body cap — which is a cheap way to spend the server's
+# CPU from outside. bcrypt only reads the first 72 bytes of a password, so these
+# ceilings are far past anything that can affect whether a login succeeds.
+_MAX_USERNAME = 200
+_MAX_PASSWORD = 1024
+
+
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(max_length=_MAX_USERNAME)
+    password: str = Field(max_length=_MAX_PASSWORD)
 
 
 class CredentialsUpdate(BaseModel):
-    current_password: str
-    new_username: str
-    new_password: str
+    current_password: str = Field(max_length=_MAX_PASSWORD)
+    new_username: str = Field(max_length=_MAX_USERNAME)
+    new_password: str = Field(max_length=_MAX_PASSWORD)
     # When True, delete every AuthSession row *except* the one the caller is
     # holding. Used for the "sign out other browser sessions" checkbox on the
     # Security panel — a natural expectation when changing the password because
@@ -99,8 +108,20 @@ class CredentialsUpdate(BaseModel):
         return v
 
 
+class DisableAuthRequest(BaseModel):
+    """Credentials re-entered to confirm turning login off.
+
+    Both are optional so the endpoint can still be called on an instance where
+    auth was never configured — there is nothing to prove in that case, and the
+    handler only checks them when authentication is actually in force.
+    """
+
+    username: Optional[str] = Field(default=None, max_length=_MAX_USERNAME)
+    password: Optional[str] = Field(default=None, max_length=_MAX_PASSWORD)
+
+
 class ExchangeKeyRequest(BaseModel):
-    name: str
+    name: str = Field(max_length=200)
 
     @field_validator("name")
     @classmethod
@@ -112,10 +133,11 @@ class ExchangeKeyRequest(BaseModel):
 
 
 class SetupCompleteRequest(BaseModel):
-    # Auth
+    # Auth. Also reachable before authentication — the setup wizard runs on a
+    # fresh install — so bounded for the same reason as LoginRequest.
     enable_auth: bool = False
-    username: Optional[str] = None
-    password: Optional[str] = None
+    username: Optional[str] = Field(default=None, max_length=_MAX_USERNAME)
+    password: Optional[str] = Field(default=None, max_length=_MAX_PASSWORD)
     # Settings applied during wizard
     theme: Optional[str] = None
     download_path: Optional[str] = None
@@ -242,7 +264,11 @@ def update_credentials(
         if not cc_session or not validate_session(cc_session, db):
             raise HTTPException(status_code=401, detail="Authentication required")
         if not verify_password(body.current_password, gs.auth_password_hash):
-            raise HTTPException(status_code=401, detail="Current password is incorrect")
+            # 403, not 401. The session is valid — it is this one action that is
+            # refused. Answering 401 told the client its session had lapsed, so
+            # the global handler logged the user out for mistyping a password
+            # they were only being asked to confirm.
+            raise HTTPException(status_code=403, detail="Current password is incorrect")
 
     gs.auth_username = body.new_username
     gs.auth_password_hash = hash_password(body.new_password)
@@ -269,19 +295,82 @@ def update_credentials(
 
 @router.post("/api/auth/disable")
 def disable_auth(
+    body: DisableAuthRequest,
+    request: Request,
     response: Response,
     db: Session = Depends(get_db),
     cc_session: Optional[str] = Cookie(default=None),
 ):
-    """Disable login requirement entirely. Requires current login to confirm."""
+    """Disable the login requirement entirely.
+
+    Requires the username and password to be re-entered, not merely a valid
+    session. This is the most destructive action the app offers — it throws the
+    instance open to anyone who can reach it AND discards the stored credentials,
+    so it cannot be undone by anyone who does not already know them. Gating that
+    on "a session cookie exists" meant an unattended logged-in browser, or a
+    stolen cookie, was enough to permanently open the server.
+
+    Changing the password already requires the current one. Disabling auth is
+    strictly more dangerous, so it should not ask for less.
+    """
     from app.models import GlobalSettings, AuthSession
     gs = db.query(GlobalSettings).first()
     if not gs:
         raise HTTPException(status_code=404, detail="Settings not found")
 
-    if is_auth_required(db):
-        if not cc_session or not validate_session(cc_session, db):
+    # Keyed on whether credentials EXIST, not on whether login is currently
+    # enforced. is_auth_required() is the conjunction of auth_enabled and
+    # auth_password_hash, so a row where the flag has drifted false while the hash
+    # survives would skip every check below and wipe the password anyway. The
+    # question this endpoint has to answer is "are there credentials to prove
+    # ownership of", and that is exactly auth_password_hash.
+    credentials_exist = bool(gs.auth_password_hash)
+
+    if credentials_exist:
+        # The session is only demanded when login is actually being enforced —
+        # otherwise there is no way to hold one, and clearing leftover credentials
+        # on an already-open instance would be impossible.
+        if is_auth_required(db) and (
+            not cc_session or not validate_session(cc_session, db)
+        ):
             raise HTTPException(status_code=401, detail="Authentication required")
+
+        # Rate limited on the same counter as login: this endpoint verifies a
+        # password, so without it the confirmation step would be a brute-force
+        # oracle that happens to bypass the login screen's limiter.
+        ip = _get_client_ip(request)
+        if not check_rate_limit(ip):
+            raise HTTPException(
+                status_code=429,
+                detail="Too many failed attempts. Please wait a few minutes.",
+            )
+
+        # bcrypt runs regardless of whether the username matched, so the response
+        # time does not reveal which half was wrong.
+        # Empty rather than None: passlib raises on None, and a missing password
+        # should be an ordinary failed attempt — same 401, same bcrypt cost — not
+        # a different error that distinguishes "omitted" from "wrong".
+        username_ok = body.username == gs.auth_username
+        password_ok = verify_password(body.password or "", gs.auth_password_hash or "")
+        if not username_ok or not password_ok:
+            record_failure(ip)
+            log.warning("Failed attempt to disable authentication from %s", ip)
+            # 403 rather than 401 for the same reason as update_credentials: the
+            # caller is authenticated, they just failed to confirm. A 401 here
+            # reads as "your session died" and bounces them to the login screen.
+            raise HTTPException(
+                status_code=403, detail="Username and password do not match."
+            )
+
+        clear_failures(ip)
+        log.info("Disabling authentication: credentials verified")
+    else:
+        # Says so out loud, because from the outside this is indistinguishable
+        # from the check having been skipped by mistake.
+        log.warning(
+            "Disabling authentication without verification: no password is set on "
+            "this instance, so there was nothing to confirm against"
+        )
 
     gs.auth_enabled = False
     gs.auth_username = None

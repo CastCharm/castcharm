@@ -11,6 +11,10 @@ from app.models import Feed
 _SENSITIVE_PATH_PREFIXES = ("/etc", "/proc", "/sys", "/root", "/boot", "/dev", "/run")
 
 
+# Request ceilings live in app/limits.py so that every consumer — routers,
+# schemas, settings form — reads them from one place.
+
+
 def validate_http_url(url: str) -> None:
     """Raise ValueError if url is not a plain http(s) URL.
 

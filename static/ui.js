@@ -310,11 +310,11 @@ document.addEventListener("click", (e) => {
   if (action === "sec-update-credentials") { _secUpdateCredentials(); return; }
   if (action === "sec-disable-auth")       { _secDisableAuth(); return; }
   if (action === "sec-enable-auth")        { _secEnableAuth(); return; }
-  if (action === "sec-do-disable") {
-    Modal.close();
-    _secDoDisable();
-    return;
-  }
+  // The dialog stays open: it now carries username and password fields that the
+  // handler has to read, and it keeps a wrong-password error in place so the user
+  // can correct it rather than reopening from scratch. _secDoDisable closes it
+  // itself once the server has accepted.
+  if (action === "sec-do-disable") { _secDoDisable(); return; }
 
   // ── External API keys ─────────────────────────────────────
   if (action === "api-key-generate") { _apiKeyGenerate(); return; }
