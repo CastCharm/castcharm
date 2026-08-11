@@ -172,6 +172,9 @@ class Episode(Base):
     __tablename__ = "episodes"
 
     id = Column(Integer, primary_key=True, index=True)
+    # Indexed via the covering composite ix_episodes_feed_window created in
+    # app/database.py — see the note there. A ForeignKey gets no index of its own
+    # from SQLAlchemy or SQLite, and every per-feed query needs one.
     feed_id = Column(Integer, ForeignKey("feeds.id", ondelete="CASCADE"), nullable=False)
 
     # RSS fields

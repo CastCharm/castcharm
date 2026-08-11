@@ -9,13 +9,23 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
 
 from app.database import init_db, SessionLocal
+from app.limits import (
+    MAX_BULK_IDS,
+    MAX_IDS_IN_URL,
+    MAX_INDEX_IDS,
+    MAX_PAGE_SIZE,
+    MAX_REQUEST_BYTES,
+    MAX_SEARCH_LEN,
+    WORKER_THREADS,
+)
 from app.models import Episode, Feed
 from app.scheduler import start_scheduler, stop_scheduler, is_running
-from app.schemas import StatusOut
+from app.schemas import LimitsOut, StatusOut
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,17 +43,50 @@ _static_dir = (Path(__file__).parent.parent / "static").resolve()
 _index_html: str = ""
 
 
+def _asset_version() -> str:
+    """Cache-busting token for /static/ URLs.
+
+    APP_VERSION alone is not enough. It defaults to "dev" in the Dockerfile, so an
+    instance built without an explicit version stamps every asset ?v=dev forever —
+    while those same assets are served immutable for a year. The browser is then
+    entitled to keep the JavaScript it first saw across every subsequent rebuild,
+    which makes front-end changes invisible to exactly the people who already use
+    the app, and looks for all the world like the change did not deploy.
+
+    Mixing in the newest mtime under static/ means the token moves whenever the
+    assets actually move, whatever APP_VERSION says. A tagged release still gets a
+    stable token because its files are baked into the image at build time.
+    """
+    try:
+        newest = max(
+            (p.stat().st_mtime_ns for p in _static_dir.rglob("*") if p.is_file()),
+            default=0,
+        )
+    except OSError:
+        # An unreadable static dir is the server's problem, not the cache's; fall
+        # back to the plain version rather than failing startup over a token.
+        return APP_VERSION
+    return f"{APP_VERSION}-{newest:x}"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _index_html
+    import anyio.to_thread
+
+    anyio.to_thread.current_default_thread_limiter().total_tokens = WORKER_THREADS
+    log.info("Worker threadpool limited to %d threads", WORKER_THREADS)
+
     init_db()
     _ensure_default_settings()
     _cleanup_interrupted_downloads()
     start_scheduler()
-    # Pre-process index.html: inject ?v=<version> into all /static/ asset URLs so
+    # Pre-process index.html: inject ?v=<token> into all /static/ asset URLs so
     # that a container update (e.g. via Watchtower) busts the browser cache.
     raw = (_static_dir / "index.html").read_text()
-    _index_html = re.sub(r'(src|href)="(/static/[^"]+)"', rf'\1="\2?v={APP_VERSION}"', raw)
+    _index_html = re.sub(
+        r'(src|href)="(/static/[^"]+)"', rf'\1="\2?v={_asset_version()}"', raw
+    )
     yield
     stop_scheduler()
 
@@ -226,13 +269,55 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 app.add_middleware(SecurityHeadersMiddleware)
 
 
+# ── Request size limit ─────────────────────────────────────────────────────────
+# Starlette buffers a request body in memory before a handler ever sees it, so
+# without this the size of an incoming request is entirely the client's choice.
+# On a Pi-class box a single multi-gigabyte POST to any endpoint at all — even one
+# whose body is a single integer — is enough to end the process.
+#
+# This reads Content-Length, so a chunked request without one slips past. That is
+# accepted: the handlers that take uploads all read with an explicit byte cap, so
+# the streaming path has its own limit, and this is here to stop the trivial case
+# before any of it is buffered.
+class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: StarletteRequest, call_next):
+        raw_length = request.headers.get("content-length")
+        if raw_length:
+            try:
+                length = int(raw_length)
+            except ValueError:
+                return JSONResponse(
+                    status_code=400, content={"detail": "Invalid Content-Length"}
+                )
+            if length > MAX_REQUEST_BYTES:
+                log.warning(
+                    "Rejected %s %s: body of %d bytes exceeds the %d byte limit",
+                    request.method,
+                    request.url.path,
+                    length,
+                    MAX_REQUEST_BYTES,
+                )
+                return JSONResponse(
+                    status_code=413, content={"detail": "Request body too large"}
+                )
+        return await call_next(request)
+
+
+app.add_middleware(RequestSizeLimitMiddleware)
+
+
 # ── Auth middleware ────────────────────────────────────────────────────────────
 # Routes that are always accessible regardless of auth state:
 _AUTH_EXEMPT_PREFIXES = (
     "/api/auth/",
     "/api/setup/",
 )
-_AUTH_EXEMPT_EXACT = {"/api/status"}
+# /api/limits is exempt alongside /api/status because it is pure constants — the
+# same numbers a caller would discover by being refused — and because a client
+# that cannot read it falls back to guessing. Making it answerable before login
+# removes the case where a request timed slightly early gets a 401 and the client
+# spends the next stretch sizing itself to assumptions instead.
+_AUTH_EXEMPT_EXACT = {"/api/status", "/api/limits"}
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -252,15 +337,47 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if path in _AUTH_EXEMPT_EXACT:
             return await call_next(request)
 
-        # Check whether auth is required for this instance
-        db = SessionLocal()
-        try:
-            from app.auth import (
-                API_KEY_FAILURE_LOG_THRESHOLD, COOKIE_NAME, extract_api_key,
-                is_api_enabled, is_auth_required, record_api_key_failure,
-                validate_api_key, validate_session,
+        # Resolve the decision in a worker thread and — critically — let go of
+        # the database session before handing the request downstream.
+        #
+        # This used to run its queries inline and keep the session open across
+        # `await call_next(...)`. Two things went wrong with that. The session
+        # holds its pooled connection until it is closed, so every in-flight
+        # request pinned TWO connections: this one for the whole round trip plus
+        # the one the endpoint itself takes via get_db. And the queries ran on
+        # the event loop, so each of them stalled every other request in the
+        # process. Together those turned a burst of concurrent art requests into
+        # pool exhaustion, 30-second waits and a cascade of 500s.
+        allowed, auth_method, api_key_id = await run_in_threadpool(
+            self._resolve_auth, request, path
+        )
+        if not allowed:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Authentication required"},
             )
 
+        request.state.auth_method = auth_method
+        if api_key_id is not None:
+            request.state.api_key_id = api_key_id
+        return await call_next(request)
+
+    @staticmethod
+    def _resolve_auth(request: StarletteRequest, path: str) -> tuple[bool, str, int | None]:
+        """Return (allowed, auth_method, api_key_id) using a short-lived session.
+
+        Runs in a worker thread. Everything that touches the database must stay
+        inside this function so the connection is returned to the pool the moment
+        the decision is made.
+        """
+        from app.auth import (
+            API_KEY_FAILURE_LOG_THRESHOLD, COOKIE_NAME, extract_api_key,
+            is_api_enabled, is_auth_required, record_api_key_failure,
+            validate_api_key, validate_session,
+        )
+
+        db = SessionLocal()
+        try:
             # API keys are checked before the session so that last_used_at is
             # recorded even on instances with login turned off.
             api_key = extract_api_key(request)
@@ -269,9 +386,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 # disabled key never has its last_used_at touched.
                 key_id = validate_api_key(api_key, db) if is_api_enabled(db) else None
                 if key_id is not None:
-                    request.state.auth_method = "api_key"
-                    request.state.api_key_id = key_id
-                    return await call_next(request)
+                    return True, "api_key", key_id
                 # Throttle the log — a hostile scanner cycling through guesses
                 # would otherwise emit a WARNING per request. First N failures
                 # in the window log at WARNING; the rest drop to DEBUG so the
@@ -291,19 +406,15 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 # with login disabled stays as open as it was before.
 
             if not is_auth_required(db):
-                return await call_next(request)
+                return True, "none", None
 
             token = request.cookies.get(COOKIE_NAME)
             if token and validate_session(token, db):
-                request.state.auth_method = "session"
-                return await call_next(request)
+                return True, "session", None
+
+            return False, "none", None
         finally:
             db.close()
-
-        return JSONResponse(
-            status_code=401,
-            content={"detail": "Authentication required"},
-        )
 
 
 app.add_middleware(AuthMiddleware)
@@ -322,6 +433,29 @@ app.include_router(settings_router.router)
 app.include_router(stats_router.router)
 app.include_router(playlists_router)
 app.include_router(player_router)
+
+
+@app.get("/api/limits", response_model=LimitsOut, tags=["system"])
+def get_limits():
+    """Publish the request ceilings so clients can size themselves to this server.
+
+    Touches no database and no filesystem — it is a handful of constants — so a
+    client is free to re-read it whenever it likes.
+
+    The point is that a limit lives in exactly one place. Before this, the Android
+    app carried its own copy of these numbers, which is fine right up until a
+    server is upgraded and the two disagree: the client keeps asking for what the
+    server used to allow and every request comes back 422, for a reason visible
+    nowhere in the client.
+    """
+    return LimitsOut(
+        max_page_size=MAX_PAGE_SIZE,
+        max_ids_in_url=MAX_IDS_IN_URL,
+        max_bulk_ids=MAX_BULK_IDS,
+        max_index_ids=MAX_INDEX_IDS,
+        max_search_len=MAX_SEARCH_LEN,
+        max_request_bytes=MAX_REQUEST_BYTES,
+    )
 
 
 @app.get("/api/status", response_model=StatusOut, tags=["system"])

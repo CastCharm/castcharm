@@ -1,6 +1,8 @@
 from datetime import datetime
 from typing import Any, Optional
-from pydantic import BaseModel, HttpUrl, field_validator
+from pydantic import BaseModel, Field, HttpUrl, field_validator
+
+from app.limits import MAX_CONCURRENT_DOWNLOADS, MAX_PAGE_SIZE
 
 
 # ---------------------------------------------------------------------------
@@ -42,36 +44,60 @@ class GlobalSettingsBase(BaseModel):
 
 
 class GlobalSettingsUpdate(BaseModel):
-    download_path: Optional[str] = None
-    check_interval: Optional[int] = None
+    """Settings patch.
+
+    The bounds below are not cosmetic. Several of these numbers are turned
+    directly into resources — threads, in-memory buffers, scheduler wakeups — so
+    without them a single settings write is enough to make the process
+    unrecoverable on any hardware, and trivially so on the small boxes this is
+    built for. They are deliberately generous; the point is that a ceiling exists.
+    """
+
+    download_path: Optional[str] = Field(default=None, max_length=4096)
+    # Minutes between feed checks. Zero or negative would turn the scheduler into
+    # a busy loop.
+    check_interval: Optional[int] = Field(default=None, ge=1, le=60 * 24 * 366)
     filename_date_prefix: Optional[bool] = None
     filename_episode_number: Optional[bool] = None
     organize_by_year: Optional[bool] = None
     save_xml: Optional[bool] = None
-    max_concurrent_downloads: Optional[int] = None
+    max_concurrent_downloads: Optional[int] = Field(
+        default=None, ge=1, le=MAX_CONCURRENT_DOWNLOADS
+    )
     auto_download_new: Optional[bool] = None
     default_id3_mapping: Optional[dict[str, str]] = None
-    log_max_entries: Optional[int] = None
-    episode_page_size: Optional[int] = None
-    keep_latest: Optional[int] = None
+    # Backs an in-memory ring buffer that is held for the life of the process.
+    log_max_entries: Optional[int] = Field(default=None, ge=10, le=50_000)
+    # How many episodes the web feed-detail page pulls per request. Clamped to the
+    # same ceiling the episode endpoints enforce, so this setting can never be
+    # configured to ask for a page the API would reject.
+    episode_page_size: Optional[int] = Field(default=None, ge=1, le=MAX_PAGE_SIZE)
+    keep_latest: Optional[int] = Field(default=None, ge=0, le=100_000)
     keep_unplayed: Optional[bool] = None
-    auto_played_threshold: Optional[int] = None
-    theme: Optional[str] = None
+    # A percentage of an episode's duration.
+    auto_played_threshold: Optional[int] = Field(default=None, ge=0, le=100)
+    theme: Optional[str] = Field(default=None, max_length=64)
     show_suggested_listening: Optional[bool] = None
-    timezone: Optional[str] = None
+    timezone: Optional[str] = Field(default=None, max_length=64)
+    # The time fields are "HH:MM" from an <input type="time">. The cap is loose on
+    # purpose — it is here to stop a megabyte being stored, not to validate the
+    # format, which the scheduler does. A max_length of exactly 5 would sit right
+    # on the boundary of what a browser may legitimately submit.
     scheduled_xml_enabled: Optional[bool] = None
-    scheduled_xml_time: Optional[str] = None
+    scheduled_xml_time: Optional[str] = Field(default=None, max_length=16)
     scheduled_opml_enabled: Optional[bool] = None
-    scheduled_opml_time: Optional[str] = None
+    scheduled_opml_time: Optional[str] = Field(default=None, max_length=16)
     scheduled_sync_enabled: Optional[bool] = None
-    scheduled_sync_time: Optional[str] = None
+    scheduled_sync_time: Optional[str] = Field(default=None, max_length=16)
     download_window_enabled: Optional[bool] = None
-    download_window_start: Optional[str] = None
-    download_window_end: Optional[str] = None
+    download_window_start: Optional[str] = Field(default=None, max_length=16)
+    download_window_end: Optional[str] = Field(default=None, max_length=16)
     autoclean_enabled: Optional[bool] = None
-    autoclean_mode: Optional[str] = None
-    autoclean_time: Optional[str] = None
-    sync_lookback_limit: Optional[int] = None
+    autoclean_mode: Optional[str] = Field(default=None, max_length=32)
+    autoclean_time: Optional[str] = Field(default=None, max_length=16)
+    # How many entries back into a feed each sync re-reads. No real feed has this
+    # many entries, so the bound is a backstop rather than a restriction.
+    sync_lookback_limit: Optional[int] = Field(default=None, ge=0, le=100_000)
     api_enabled: Optional[bool] = None
 
 
@@ -86,7 +112,7 @@ class GlobalSettingsOut(GlobalSettingsBase):
 # ---------------------------------------------------------------------------
 
 class ApiKeyCreate(BaseModel):
-    name: str
+    name: str = Field(max_length=200)
 
     @field_validator("name")
     @classmethod
@@ -98,7 +124,7 @@ class ApiKeyCreate(BaseModel):
 
 
 class ApiKeyRename(BaseModel):
-    name: str
+    name: str = Field(max_length=200)
 
     @field_validator("name")
     @classmethod
@@ -134,9 +160,11 @@ class ApiKeyPurgeResult(BaseModel):
 # ---------------------------------------------------------------------------
 
 class FeedCreate(BaseModel):
-    url: str
+    # Bounded like every other stored string: the cost of an oversized value
+    # here outlives the request that carried it.
+    url: str = Field(max_length=2048)
     download_all: bool = False
-    title_override: Optional[str] = None
+    title_override: Optional[str] = Field(default=None, max_length=500)
     # Set only after the user has been shown the folder-already-exists prompt and
     # has chosen to go ahead. Without it the add is refused with a 409 so the
     # decision is never made on their behalf.
@@ -152,7 +180,7 @@ class FeedCreate(BaseModel):
 
 
 class ManualFeedCreate(BaseModel):
-    title: str
+    title: str = Field(max_length=500)
     # See FeedCreate.allow_existing_folder.
     allow_existing_folder: bool = False
 
@@ -166,25 +194,27 @@ class ManualFeedCreate(BaseModel):
 
 
 class FeedUpdate(BaseModel):
-    title: Optional[str] = None
-    url: Optional[str] = None
+    title: Optional[str] = Field(default=None, max_length=500)
+    url: Optional[str] = Field(default=None, max_length=2048)
     active: Optional[bool] = None
-    download_path: Optional[str] = None
-    check_interval: Optional[int] = None
+    download_path: Optional[str] = Field(default=None, max_length=4096)
+    # Minutes. Zero or negative would be a busy scheduler loop; the read path in
+    # app/scheduler.py already floors it, and this stops it being stored at all.
+    check_interval: Optional[int] = Field(default=None, ge=1, le=60 * 24 * 366)
     filename_date_prefix: Optional[bool] = None
     filename_episode_number: Optional[bool] = None
     organize_by_year: Optional[bool] = None
     save_xml: Optional[bool] = None
     id3_enabled: Optional[bool] = None
     id3_field_mapping: Optional[dict[str, str]] = None
-    podcast_group: Optional[str] = None
+    podcast_group: Optional[str] = Field(default=None, max_length=500)
     auto_download_new: Optional[bool] = None
-    episode_number_start: Optional[int] = None
-    custom_image_url: Optional[str] = None
-    keep_latest: Optional[int] = None
+    episode_number_start: Optional[int] = Field(default=None, ge=0, le=1_000_000)
+    custom_image_url: Optional[str] = Field(default=None, max_length=2048)
+    keep_latest: Optional[int] = Field(default=None, ge=0, le=100_000)
     keep_unplayed: Optional[bool] = None
     autoclean_enabled: Optional[bool] = None
-    autoclean_mode: Optional[str] = None
+    autoclean_mode: Optional[str] = Field(default=None, max_length=32)
     autoclean_exclude: Optional[bool] = None
     # Not a Feed column. Set only after the user has been shown the
     # folder-already-exists prompt for a podcast_group rename and chosen to proceed;
@@ -293,17 +323,20 @@ class EpisodeOut(BaseModel):
 # ---------------------------------------------------------------------------
 
 class PlaylistCreate(BaseModel):
-    name: str
-    description: Optional[str] = None
-    type: str = "custom"       # 'feed' | 'custom'
+    # Bounded because these are stored: without a limit a client can write an
+    # arbitrarily large string into the database, where the cost outlives the
+    # request. Same reasoning as SetImageBody in app/routers/episodes.py.
+    name: str = Field(max_length=500)
+    description: Optional[str] = Field(default=None, max_length=5000)
+    type: str = Field(default="custom", max_length=32)   # 'feed' | 'custom'
     feed_id: Optional[int] = None
-    filter: str = "unplayed"   # 'all' | 'unplayed'
+    filter: str = Field(default="unplayed", max_length=32)  # 'all' | 'unplayed'
 
 
 class PlaylistUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
-    filter: Optional[str] = None
+    name: Optional[str] = Field(default=None, max_length=500)
+    description: Optional[str] = Field(default=None, max_length=5000)
+    filter: Optional[str] = Field(default=None, max_length=32)
 
 
 class PlaylistEpisodeOut(BaseModel):
@@ -333,7 +366,15 @@ class PlaylistEpisodeAdd(BaseModel):
 
 
 class PlaylistReorder(BaseModel):
-    episode_ids: list[int]   # full ordered list of episode IDs
+    # The playlist's full ordering, so the ceiling has to clear the largest real
+    # playlist — MAX_BULK_IDS would be wrong here, since this is not a batch of
+    # work but a complete list, and truncating it would silently reorder into the
+    # wrong shape. MAX_PAGE_SIZE is the same "episode records in one request"
+    # budget the list endpoints use.
+    #
+    # Ids not already in the playlist are ignored by the handler, so an oversized
+    # body was never dangerous — just unbounded work to no effect.
+    episode_ids: list[int] = Field(max_length=MAX_PAGE_SIZE)
 
 
 # ---------------------------------------------------------------------------
@@ -362,6 +403,26 @@ class PlayerPlayRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # System status
 # ---------------------------------------------------------------------------
+
+class LimitsOut(BaseModel):
+    """The ceilings this server enforces, so clients need not assume them.
+
+    Every value mirrors a constant in app/limits.py. A client that reads these
+    sizes its requests to whatever the server it is actually talking to will
+    accept, rather than to a number compiled into the client months earlier —
+    which is how the two drift apart and requests start coming back 422.
+
+    Fields are additive only. A client written against an older shape must keep
+    working, so nothing here is ever removed or narrowed in meaning.
+    """
+
+    max_page_size: int
+    max_ids_in_url: int
+    max_bulk_ids: int
+    max_index_ids: int
+    max_search_len: int
+    max_request_bytes: int
+
 
 class StatusOut(BaseModel):
     scheduler_running: bool

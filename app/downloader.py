@@ -11,6 +11,7 @@ from typing import Optional
 
 import httpx
 
+from app.limits import MAX_CONCURRENT_DOWNLOADS
 from app.models import Episode, Feed, GlobalSettings
 from app.utils import sanitize_filename, get_group_feed_ids
 from sqlalchemy.orm import Session, joinedload
@@ -52,7 +53,10 @@ def _get_max_concurrent() -> int:
         try:
             gs = db.query(GlobalSettings).first()
             val = (gs.max_concurrent_downloads if gs else None) or 2
-            _cached_max_concurrent = max(1, int(val))
+            # Clamped both ways. The upper bound matters on the read path and not
+            # just at the settings endpoint: a row written before the ceiling
+            # existed can hold any number, and this is what turns it into threads.
+            _cached_max_concurrent = min(MAX_CONCURRENT_DOWNLOADS, max(1, int(val)))
         finally:
             db.close()
     except Exception:
@@ -249,9 +253,24 @@ READ_TIMEOUT = 120
 
 
 def _get_effective_settings(feed: Feed, db: Session) -> GlobalSettings:
-    gs = db.query(GlobalSettings).first()
+    """The single GlobalSettings row, fetched at most once per session.
+
+    This is called from get_podcast_folder, which in turn runs once per feed while
+    building a feed list and once per episode while building file paths — so an
+    unmemoised query here meant a SELECT on global_settings for every row of work
+    the app did. Listing twelve feeds issued twelve identical queries; a sync
+    across a thousand episodes issued a thousand.
+
+    Caching on the Session is caching per request: get_db yields a fresh one per
+    request and closes it afterwards, so the value cannot go stale across
+    requests. Within a request it is the same object the identity map would hand
+    back anyway, so a write to settings elsewhere in the request is still visible
+    through this reference.
+    """
+    gs = getattr(db, "_cc_settings", None)
     if gs is None:
-        gs = GlobalSettings()
+        gs = db.query(GlobalSettings).first() or GlobalSettings()
+        db._cc_settings = gs
     return gs
 
 

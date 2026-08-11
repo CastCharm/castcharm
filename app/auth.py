@@ -116,21 +116,44 @@ def create_session(db: Session) -> str:
     return token
 
 
+# How often a session's rolling expiry is actually rewritten.
+#
+# Extending it on literally every request meant an UPDATE plus a COMMIT on
+# auth_sessions for each one — and since the web UI authenticates by session,
+# that is every page load, every API call behind it, and every cover image it
+# pulls. On SQLite each of those takes the single writer lock, so loading one
+# feed page serialised a hundred one-row writes behind each other. It is the same
+# fault as API_KEY_LAST_USED_RESOLUTION below, on the path that carries far more
+# traffic.
+#
+# Hourly keeps rolling expiry working exactly as intended: SESSION_LIFETIME is 30
+# days, so an active user's session is extended long before it could lapse, and
+# the common request becomes read-only.
+SESSION_TOUCH_RESOLUTION = timedelta(hours=1)
+
+
 def validate_session(token: str, db: Session) -> bool:
-    """Return True if the token is valid and not expired. Extends expiry on use."""
+    """Return True if the token is valid and not expired. Extends expiry on use.
+
+    The extension is written at most once per SESSION_TOUCH_RESOLUTION, so
+    expires_at and last_used_at can lag reality by up to that long.
+    """
     from app.models import AuthSession
     session = db.query(AuthSession).filter(AuthSession.token == token).first()
     if not session:
         return False
-    if session.expires_at < datetime.utcnow():
+    now = datetime.utcnow()
+    if session.expires_at < now:
         db.delete(session)
         db.commit()
         log.info("Expired session cleaned up")
         return False
-    # Rolling expiry: extend on each use so active users stay logged in
-    session.expires_at = datetime.utcnow() + SESSION_LIFETIME
-    session.last_used_at = datetime.utcnow()
-    db.commit()
+    # Rolling expiry: extend on use so active users stay logged in, but only when
+    # the stored value has actually gone stale.
+    if session.last_used_at is None or now - session.last_used_at >= SESSION_TOUCH_RESOLUTION:
+        session.expires_at = now + SESSION_LIFETIME
+        session.last_used_at = now
+        db.commit()
     return True
 
 
@@ -176,18 +199,32 @@ def extract_api_key(request) -> Optional[str]:
     return request.headers.get("X-API-Key", "").strip() or None
 
 
+# last_used_at exists to answer "is this key still in use, and roughly when
+# last?" — a question that does not need per-request precision. Writing it on
+# every request made every authenticated call, including each cover-art fetch,
+# take SQLite's single writer lock, so a burst of image requests serialised
+# behind a queue of one-row UPDATEs. Coarsening it to once per window keeps the
+# settings screen just as useful and makes the common path read-only.
+API_KEY_LAST_USED_RESOLUTION = timedelta(minutes=5)
+
+
 def validate_api_key(plain: str, db: Session) -> Optional[int]:
     """Return the key's id if it exists, else None. Records last_used_at.
 
     The id is returned rather than a bool so the request can know *which* key
     authenticated it, which is what lets a client revoke its own key on logout.
+
+    last_used_at is only rewritten once per API_KEY_LAST_USED_RESOLUTION, so the
+    value can lag reality by up to that long.
     """
     from app.models import ApiKey
     key = db.query(ApiKey).filter(ApiKey.key_hash == hash_api_key(plain)).first()
     if not key:
         return None
-    key.last_used_at = datetime.utcnow()
-    db.commit()
+    now = datetime.utcnow()
+    if key.last_used_at is None or now - key.last_used_at >= API_KEY_LAST_USED_RESOLUTION:
+        key.last_used_at = now
+        db.commit()
     return key.id
 
 

@@ -2,14 +2,15 @@ import logging
 import os
 from datetime import datetime
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
 from app.downloader import enqueue_download
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.models import Episode, Feed
+from app.limits import MAX_BULK_IDS, MAX_PAGE_SIZE, MAX_SEARCH_LEN
 from app.utils import get_group_feed_ids
 from app.schemas import EpisodeOut
 
@@ -169,13 +170,22 @@ def list_episodes(
     status: str | None = None,
     feed_id: int | None = None,
     include_hidden: bool = False,
-    search: str | None = None,
-    limit: int = 50,
-    offset: int = 0,
+    search: str | None = Query(None, max_length=MAX_SEARCH_LEN),
+    limit: int = Query(50, ge=1, le=MAX_PAGE_SIZE),
+    offset: int = Query(0, ge=0),
     download_since: Optional[datetime] = None,
     sort: str | None = None,
     db: Session = Depends(get_db),
 ):
+    """List episodes, newest first.
+
+    An over-large limit is rejected with a 422 rather than quietly trimmed, so a
+    caller always knows how much of the collection it actually received. See
+    app/limits.py for where the ceiling comes from; it sits above anything either
+    front-end asks for, so only an API client walking the whole library has to
+    paginate. Unbounded, a single ?limit=1000000 was a million ORM objects and up
+    to two million filesystem stats inside _ep_out.
+    """
     q = db.query(Episode).options(joinedload(Episode.feed))
     if status:
         q = q.filter(Episode.status == status)
@@ -308,9 +318,14 @@ def get_suggestions(db: Session = Depends(get_db)):
     if gs and not getattr(gs, "show_suggested_listening", True):
         return SuggestionsOut()
 
-    episodes = (
-        db.query(Episode)
-        .options(joinedload(Episode.feed))
+    # Only the three columns the bucketing actually needs. This runs on every
+    # dashboard load, and it has to consider the whole eligible library to pick
+    # from it — so the thing to control is the per-row cost, not the row count.
+    # Materialising full ORM objects here (with the feed eagerly joined, and
+    # _ep_out's filesystem stats behind them) meant loading an entire library to
+    # keep twelve episodes.
+    candidates = (
+        db.query(Episode.id, Episode.feed_id, Episode.duration)
         .filter(
             Episode.status == "downloaded",
             Episode.played.is_(False),
@@ -321,44 +336,67 @@ def get_suggestions(db: Session = Depends(get_db)):
     )
 
     short, medium, long, extra_long = [], [], [], []
-    for ep in episodes:
-        secs = _parse_seconds(ep.duration)
+    for ep_id, feed_id, duration in candidates:
+        secs = _parse_seconds(duration)
         if secs < 60:
             continue
         mins = secs / 60
         if mins <= 15:
-            short.append(ep)
+            short.append((ep_id, feed_id))
         elif mins <= 30:
-            medium.append(ep)
+            medium.append((ep_id, feed_id))
         elif mins <= 60:
-            long.append(ep)
+            long.append((ep_id, feed_id))
         else:
-            extra_long.append(ep)
+            extra_long.append((ep_id, feed_id))
 
-    def _pick_diverse(pool: list, n: int = 3) -> list[EpisodeOut]:
+    def _pick_diverse(pool: list[tuple[int, int]], n: int = 3) -> list[int]:
+        """Choose up to n episode ids, preferring one per feed."""
         if not pool:
             return []
         random.shuffle(pool)
-        picked, seen_feeds = [], set()
-        for ep in pool:
-            if ep.feed_id not in seen_feeds and len(picked) < n:
-                picked.append(ep)
-                seen_feeds.add(ep.feed_id)
-        for ep in pool:
-            if ep not in picked and len(picked) < n:
-                picked.append(ep)
-        return [_ep_out(ep) for ep in picked]
+        picked: list[int] = []
+        seen_feeds: set[int] = set()
+        for ep_id, feed_id in pool:
+            if feed_id not in seen_feeds and len(picked) < n:
+                picked.append(ep_id)
+                seen_feeds.add(feed_id)
+        if len(picked) < n:
+            already = set(picked)
+            for ep_id, _feed_id in pool:
+                if ep_id not in already and len(picked) < n:
+                    picked.append(ep_id)
+        return picked
+
+    buckets = {
+        "short": _pick_diverse(short),
+        "medium": _pick_diverse(medium),
+        "long": _pick_diverse(long),
+        "extra_long": _pick_diverse(extra_long),
+    }
+
+    # One query for the twelve chosen rows, rather than having loaded everything.
+    chosen_ids = [ep_id for ids in buckets.values() for ep_id in ids]
+    by_id = {}
+    if chosen_ids:
+        by_id = {
+            ep.id: _ep_out(ep)
+            for ep in db.query(Episode)
+            .options(joinedload(Episode.feed))
+            .filter(Episode.id.in_(chosen_ids))
+            .all()
+        }
 
     return SuggestionsOut(
-        short=_pick_diverse(short),
-        medium=_pick_diverse(medium),
-        long=_pick_diverse(long),
-        extra_long=_pick_diverse(extra_long),
+        **{name: [by_id[i] for i in ids if i in by_id] for name, ids in buckets.items()}
     )
 
 
 @router.get("/continue-listening", response_model=list[EpisodeOut])
-def continue_listening(limit: int = 10, db: Session = Depends(get_db)):
+def continue_listening(
+    limit: int = Query(10, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
     """Return episodes that have been started but not finished, newest activity first."""
     episodes = (
         db.query(Episode)
@@ -498,7 +536,10 @@ class SetNumberBody(BaseModel):
 
 
 class SetImageBody(BaseModel):
-    url: str | None = None  # None = clear custom image
+    # Bounded because this is stored: without a limit a client can write an
+    # arbitrarily large string into the database and it stays there, which on a
+    # small box is a disk-space problem that outlives the request.
+    url: str | None = Field(default=None, max_length=2048)  # None = clear custom image
 
 
 @router.post("/{episode_id}/set-number", response_model=EpisodeOut)
@@ -597,7 +638,21 @@ async def upload_episode_image(
 
 
 class SetID3TagsBody(BaseModel):
+    # Same reasoning as SetImageBody: this dict is persisted as JSON on the episode
+    # row, so its size is a lasting cost rather than a momentary one.
     tags: dict[str, str] | None = None  # None = clear all overrides
+
+    @field_validator("tags")
+    @classmethod
+    def _bound_tags(cls, v: dict[str, str] | None) -> dict[str, str] | None:
+        if v is None:
+            return v
+        if len(v) > 64:
+            raise ValueError("Too many tags (max 64)")
+        for key, value in v.items():
+            if len(key) > 128 or len(value) > 2048:
+                raise ValueError(f"Tag '{key[:32]}' is too long")
+        return v
 
 
 @router.post("/{episode_id}/set-id3-tags", response_model=EpisodeOut)
@@ -690,7 +745,16 @@ def toggle_played(episode_id: int, db: Session = Depends(get_db)):
 
 
 class ProgressBody(BaseModel):
-    position_seconds: int
+    # Wide enough to accept anything a client could plausibly compute, including a
+    # wrapped 32-bit value, and narrow enough that a body cannot make Python build
+    # an arbitrary-precision integer just to parse it.
+    #
+    # Deliberately NOT the range that gets stored. Rejecting an out-of-range
+    # position would break progress sync outright for any client that sent one —
+    # and the handler has always clamped the value anyway, so validation here
+    # would buy nothing while turning a harmless bad reading into a 422 that
+    # repeats on every retry. Bound the parse; clamp the write.
+    position_seconds: int = Field(ge=-2_147_483_648, le=2_147_483_647)
 
 
 @router.post("/{episode_id}/progress", response_model=EpisodeOut)
@@ -705,7 +769,9 @@ def update_progress(episode_id: int, body: ProgressBody, db: Session = Depends(g
     )
     if not ep:
         raise HTTPException(status_code=404, detail="Episode not found")
-    ep.play_position_seconds = max(0, body.position_seconds)
+    # Clamped both ways here, so what lands in the row is always sane regardless
+    # of what any client sends or how old it is.
+    ep.play_position_seconds = min(1_000_000, max(0, body.position_seconds))
     ep.last_played_at = datetime.utcnow()
     db.commit()
     db.refresh(ep)
@@ -769,7 +835,11 @@ def retry_all_failed(db: Session = Depends(get_db)):
 
 
 class BulkBody(BaseModel):
-    episode_ids: list[int]
+    # Capped so one request cannot build an unbounded IN () clause, materialise an
+    # unbounded list of ORM objects, or — for delete_file — hand an unbounded
+    # amount of filesystem work to a single request. Clients that want more do
+    # more requests, which keeps each one interruptible and its cost predictable.
+    episode_ids: list[int] = Field(max_length=MAX_BULK_IDS)
     action: str  # download | delete_file | hide | unhide | mark_played | mark_unplayed
 
 

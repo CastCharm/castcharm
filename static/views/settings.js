@@ -55,7 +55,7 @@ async function viewSettings() {
             <div class="form-group">
               <label class="form-label">Episode Page Size</label>
               <input class="form-control" name="episode_page_size" type="number"
-                     min="10" value="${settings.episode_page_size ?? 10000}"
+                     min="10" max="10000" value="${settings.episode_page_size ?? 10000}"
                      data-numeric="1" style="max-width:160px" />
               <div class="form-hint">How many episodes to load at a time on the feed page. A "Load more" button appears when there are additional episodes. Default is 10,000 (effectively loads all but handles extremely large feeds).</div>
             </div>
@@ -124,7 +124,7 @@ async function viewSettings() {
                 <div class="form-group">
                   <label class="form-label">Keep count (N)</label>
                   <input class="form-control" name="keep_latest" type="number"
-                         min="1" value="${settings.keep_latest ?? 10}" data-numeric="1"
+                         min="1" max="100000" value="${settings.keep_latest ?? 10}" data-numeric="1"
                          style="max-width:120px" />
                 </div>
               </div>
@@ -253,7 +253,7 @@ async function viewSettings() {
               <div class="form-group">
                 <label class="form-label">Check Interval (minutes)</label>
                 <input class="form-control" name="check_interval" type="number"
-                       min="1" value="${settings.check_interval}" data-numeric="1"
+                       min="1" max="527040" value="${settings.check_interval}" data-numeric="1"
                        style="max-width:150px" />
                 <div class="form-hint">How often to check all feeds for new episodes. Individual feeds can override this.</div>
               </div>
@@ -262,7 +262,7 @@ async function viewSettings() {
             <div class="form-group">
               <label class="form-label">Sync Lookback Limit</label>
               <input class="form-control" name="sync_lookback_limit" type="number"
-                     min="0" value="${settings.sync_lookback_limit ?? 50}" data-numeric="1"
+                     min="0" max="100000" value="${settings.sync_lookback_limit ?? 50}" data-numeric="1"
                      style="max-width:120px" />
               <div class="form-hint">Maximum number of RSS entries to inspect on each routine sync. Set to 0 for unlimited. Has no effect on the initial sync when a feed is first added, or when importing from XML. Default: 50.</div>
             </div>
@@ -578,26 +578,41 @@ async function viewSettings() {
     for (const [k, v] of Object.entries(raw)) {
       if (k.startsWith("id3_") && v) id3Mapping[k.slice(4)] = v;
     }
+
+    // Clamp rather than rely on the inputs' min/max, which are advisory when a
+    // form is submitted from JS as this one is. These bounds mirror
+    // GlobalSettingsUpdate in app/schemas.py; sending something outside them is a
+    // 422 the user cannot act on, whereas clamping saves the nearest legal value.
+    // A blank field means "use the default", not "use the minimum" — Number("")
+    // is 0, so an empty input has to be caught before the clamp sees it.
+    const clamp = (v, lo, hi, fallback) => {
+      if (v === "" || v === null || v === undefined) return fallback;
+      const n = Number(v);
+      return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fallback;
+    };
+
     const payload = {
       download_path: raw.download_path,
-      check_interval: Number(raw.check_interval) || 60,
-      max_concurrent_downloads: Number(raw.max_concurrent_downloads) || 2,
+      check_interval: clamp(raw.check_interval, 1, 527040, 60),
+      max_concurrent_downloads: clamp(raw.max_concurrent_downloads, 1, 16, 2),
       filename_date_prefix: raw.filename_date_prefix ?? false,
       filename_episode_number: raw.filename_episode_number ?? true,
       organize_by_year: raw.organize_by_year ?? false,
       save_xml: raw.save_xml ?? false,
       auto_download_new: raw.auto_download_new ?? true,
-      sync_lookback_limit: Number(raw.sync_lookback_limit) ?? 50,
+      sync_lookback_limit: clamp(raw.sync_lookback_limit, 0, 100000, 50),
       default_id3_mapping: id3Mapping,
-      log_max_entries: Number(raw.log_max_entries) || 500,
-      episode_page_size: Number(raw.episode_page_size) || 10000,
+      log_max_entries: clamp(raw.log_max_entries, 10, 50000, 500),
+      // Capped at MAX_PAGE_SIZE (app/limits.py) — the episode endpoints refuse a
+      // larger page, so a bigger value here would only break the feed page.
+      episode_page_size: clamp(raw.episode_page_size, 1, 10000, 10000),
       autoclean_enabled: raw.autoclean_enabled ?? false,
       autoclean_mode: raw.autoclean_mode || "unplayed",
       autoclean_time: raw.autoclean_time || "02:00",
       keep_latest: (raw.autoclean_enabled && (raw.autoclean_mode || "unplayed") === "recent" && raw.keep_latest)
-        ? Number(raw.keep_latest) : null,
+        ? clamp(raw.keep_latest, 0, 100000, 10) : null,
       keep_unplayed: true,
-      auto_played_threshold: Number(raw.auto_played_threshold) ?? 95,
+      auto_played_threshold: clamp(raw.auto_played_threshold, 0, 100, 95),
       show_suggested_listening: raw.show_suggested_listening ?? true,
       timezone: document.getElementById("settings-tz-input")?.value || "UTC",
       scheduled_sync_enabled: raw.scheduled_sync_enabled ?? false,
@@ -749,12 +764,28 @@ window._secEnableAuth = async function() {
 };
 
 window._secDisableAuth = async function() {
+  // Credentials are re-entered rather than just confirmed with a button. This
+  // both opens the instance to anyone who can reach it and erases the stored
+  // username and password, so it cannot be undone by someone who does not
+  // already know them — too much to hand to whoever finds the browser unlocked.
   Modal.open("Disable Login", `
-    <p style="color:var(--text-2);font-size:14px;margin-bottom:20px">
-      This will remove the login requirement. Anyone who can reach this instance
-      will have full access. Are you sure?
+    <p style="color:var(--text-2);font-size:14px;margin-bottom:16px">
+      This will remove the login requirement. <strong>Anyone who can reach this
+      instance will have full access</strong>, and the saved username and password
+      will be erased. Enter them to confirm.
     </p>
-    <div class="modal-actions">
+    <div class="form-group">
+      <label class="form-label">Username</label>
+      <input id="sec-disable-user" class="form-control" autocomplete="username"
+             maxlength="200">
+    </div>
+    <div class="form-group" style="margin-top:12px">
+      <label class="form-label">Password</label>
+      <input id="sec-disable-pass" class="form-control" type="password"
+             autocomplete="current-password" maxlength="1024">
+    </div>
+    <div id="sec-disable-error" class="form-hint" style="color:var(--error);display:none"></div>
+    <div class="modal-actions" style="margin-top:20px">
       <button class="btn btn-ghost" data-action="modal-close">Cancel</button>
       <button class="btn btn-primary" style="background:var(--error);border-color:var(--error)"
               data-action="sec-do-disable">Disable Login</button>
@@ -763,11 +794,34 @@ window._secDisableAuth = async function() {
 };
 
 window._secDoDisable = async function() {
+  const username = document.getElementById("sec-disable-user")?.value || "";
+  const password = document.getElementById("sec-disable-pass")?.value || "";
+  const errEl = document.getElementById("sec-disable-error");
+
+  const showError = (msg) => {
+    if (errEl) {
+      errEl.textContent = msg;
+      errEl.style.display = "";
+    } else {
+      Toast.error(msg);
+    }
+  };
+
+  if (!username || !password) {
+    showError("Enter your username and password to confirm.");
+    return;
+  }
+
   try {
-    await API.disableAuth();
+    await API.disableAuth(username, password);
+    Modal.close();
     Toast.success("Login disabled");
     viewSettings();
-  } catch (err) { Toast.error(err.message); }
+  } catch (err) {
+    // Kept in the dialog rather than a toast that outlives it — a wrong password
+    // here means try again, not start over.
+    showError(err.message || "Could not disable login.");
+  }
 };
 
 // ── External API key helpers ─────────────────────────────────────────────────

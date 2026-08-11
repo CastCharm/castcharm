@@ -201,7 +201,10 @@ const API = {
       revoke_other_sessions: !!extras.revoke_other_sessions,
       revoke_all_api_keys:   !!extras.revoke_all_api_keys,
     }),
-  disableAuth: () => API.post("/api/auth/disable"),
+  // Credentials are required by the server, not just a valid session — see
+  // disable_auth in app/routers/auth.py.
+  disableAuth: (username, password) =>
+    API.post("/api/auth/disable", { username, password }),
   completeSetup: (body) => API.post("/api/setup/complete", body),
   browseDirs: (path) => API.get(`/api/system/browse-dirs?path=${encodeURIComponent(path)}`),
 

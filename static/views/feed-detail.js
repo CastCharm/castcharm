@@ -397,7 +397,11 @@ async function viewFeedDetail(feedId) {
     API.getSupplementary(id),
     API.get(`/api/feeds/${id}/queue-count`).then(r => r.count).catch(() => 0),
   ]);
-  const EP_BATCH = settings.episode_page_size || 10000;
+  // Clamped on read, not just on save. A database written before MAX_PAGE_SIZE
+  // existed can hold a larger value, and sending it would 422 the request that
+  // draws this entire page — leaving the feed unopenable until someone thought to
+  // go and re-save an unrelated setting.
+  const EP_BATCH = Math.min(settings.episode_page_size || 10000, 10000);
   const episodes = await API.getFeedEpisodesWithHidden(id, EP_BATCH, 0);
   window._epState = { id, feed, offset: episodes.length, batch: EP_BATCH, statusFilter: "all" };
 
