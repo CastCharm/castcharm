@@ -1050,9 +1050,12 @@ async function viewFeedDetail(feedId) {
     e.target.value = "";
     if (!file) return;
 
-    // Refuse here what the server would refuse anyway: upload_feed_cover accepts
-    // an image of at most 10 MB. Checking first turns a round trip and a rejected
-    // preview into immediate feedback.
+    // Catch the obviously-wrong pick before spending a round trip on it. This is
+    // a convenience, not a validation: file.type is derived from the extension,
+    // so a text file renamed to .jpg still reports image/jpeg and sails through
+    // to the server, which is the only thing that actually decodes the bytes
+    // (upload_feed_cover runs PIL verify, and rejects over 10 MB). The failure
+    // path below therefore has to stay just as good as this one.
     if (!file.type.startsWith("image/")) {
       Toast.error("That file is not an image");
       return;

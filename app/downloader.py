@@ -395,6 +395,83 @@ def _build_file_path(
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".aac", ".ogg", ".flac", ".wav", ".mp4", ".opus", ".wma"}
 
 
+COVER_FILENAME = "cover.jpg"
+
+# Records the URL a cover.jpg was fetched from. Its ABSENCE beside an existing
+# cover means a person put that file there — through upload_feed_cover, or by
+# dropping it into the folder — so a refresh must leave it alone. Its presence
+# means we fetched it, and may replace it when the podcast's artwork moves.
+COVER_SOURCE_FILENAME = ".cover-source"
+
+
+def read_cover_source(folder: str) -> Optional[str]:
+    """The URL this folder's cover was fetched from, or None if user-supplied."""
+    try:
+        with open(os.path.join(folder, COVER_SOURCE_FILENAME), encoding="utf-8") as f:
+            return f.read().strip() or None
+    except Exception:
+        return None
+
+
+def clear_cover_source(folder: str) -> None:
+    """Mark this folder's cover as user-owned, so refreshes never overwrite it."""
+    try:
+        os.remove(os.path.join(folder, COVER_SOURCE_FILENAME))
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        log.warning("Could not clear cover source marker in %s: %s", folder, exc)
+
+
+def ensure_feed_cover(feed, folder: str) -> bool:
+    """
+    Make sure this feed's artwork is on disk. Returns True if a file was written.
+
+    Artwork used to reach the disk only as a side effect of downloading an
+    episode, so a feed nobody had downloaded from served its RSS artwork URL
+    straight to the browser. That made every client fetch art from the podcast
+    host directly — disclosing the user's IP address and their browsing times to
+    a third party on every render of the feed list, and leaving the page reliant
+    on that host being reachable. Anything an http:// URL simply failed to load
+    at all, because the page's CSP allows https only.
+    """
+    art_url = feed.custom_image_url or feed.image_url
+    if not art_url:
+        return False
+
+    cover_path = os.path.join(folder, COVER_FILENAME)
+    if os.path.exists(cover_path):
+        source = read_cover_source(folder)
+        if source is None or source == art_url:
+            # User-supplied, or already the artwork we would fetch.
+            return False
+
+    # Fetched to one side and moved into place only on success, so a host that
+    # is down or has pulled the image leaves the existing cover untouched
+    # rather than trading it for nothing.
+    tmp_path = cover_path + ".tmp"
+    try:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+    except Exception:
+        pass
+
+    _download_image(art_url, tmp_path)
+    if not os.path.exists(tmp_path):
+        return False
+
+    try:
+        os.replace(tmp_path, cover_path)
+        with open(os.path.join(folder, COVER_SOURCE_FILENAME), "w", encoding="utf-8") as f:
+            f.write(art_url)
+    except Exception as exc:
+        log.warning("Could not store cover for feed %s: %s", getattr(feed, "id", "?"), exc)
+        return False
+
+    log.info("Fetched cover art for '%s' from %s", getattr(feed, "title", "") or "?", art_url)
+    return True
+
+
 def _download_image(url: str, dest_path: str) -> None:
     """Download an image from *url* to *dest_path*. Skips if file already exists."""
     from urllib.parse import urlparse
@@ -407,7 +484,16 @@ def _download_image(url: str, dest_path: str) -> None:
         with httpx.Client(
             timeout=httpx.Timeout(10, read=30),
             follow_redirects=True,
-            headers={"User-Agent": "CastCharm/1.0"},
+            # A browser-shaped User-Agent, because the server is now the only
+            # thing that fetches artwork. A host that serves images to browsers
+            # but refuses "CastCharm/1.0" would otherwise leave the user with no
+            # art at all, where before their own browser would have got it.
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+                )
+            },
         ) as client:
             r = client.get(url)
             r.raise_for_status()
@@ -669,11 +755,16 @@ def download_episode(episode_id: int, db: Session) -> None:
 
         file_size = os.path.getsize(target_path)
 
-        # Save cover art sidecars
+        # Save cover art sidecars. Feed art goes through the same helper the
+        # refresh path uses, so "when may we write cover.jpg" is answered in one
+        # place and a download can no longer clobber a user's uploaded artwork.
         podcast_folder = os.path.join(base_dir, folder_name)
-        feed_art_url = feed.custom_image_url or feed.image_url
-        if feed_art_url:
-            _download_image(feed_art_url, os.path.join(podcast_folder, "cover.jpg"))
+        if ensure_feed_cover(feed, podcast_folder):
+            try:
+                from app.routers.feeds import invalidate_cover_cache
+                invalidate_cover_cache(podcast_folder)
+            except Exception:
+                pass
         ep_art_path = os.path.splitext(target_path)[0] + ".jpg"
         ep_art_url = episode.custom_image_url or episode.episode_image_url
         if ep_art_url:

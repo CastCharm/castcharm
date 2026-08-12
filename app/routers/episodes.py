@@ -83,7 +83,13 @@ def _ep_out(ep: Episode) -> EpisodeOut:
     out = EpisodeOut.model_validate(ep)
     if ep.feed:
         out.feed_title = ep.feed.title
-        out.feed_image_url = ep.feed.image_url
+        # Our own cover endpoint, never the feed's RSS artwork URL. Handing that
+        # out made every episode row fetch art from the podcast host directly,
+        # which disclosed the user's IP and reading habits to a third party — one
+        # feed page here issued 305 such requests. If no cover has been fetched
+        # yet the endpoint 404s and the client falls back to its placeholder,
+        # which is a local, private failure rather than a remote one.
+        out.feed_image_url = f"/api/feeds/{ep.feed_id}/cover.jpg"
     # Prefer local art sidecar over remote URL when no custom_image_url is set
     if not ep.custom_image_url and ep.file_path:
         art_path = os.path.splitext(ep.file_path)[0] + ".jpg"
