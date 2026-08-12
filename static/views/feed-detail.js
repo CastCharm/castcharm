@@ -236,7 +236,11 @@ async function _pollImportBanner(feedId, refreshOnDone = false) {
   if (!banner) return;
 
   function _renderBanner(s) {
-    if (!s) { banner.style.display = "none"; return; }
+    // "idle" is the server saying no import is happening. It has to be caught
+    // here as well as the falsy case: it arrives as a perfectly good object, so
+    // without this the code falls through and paints an empty banner on every
+    // feed page — trading a silent console error for a visible one.
+    if (!s || s.status === "idle") { banner.style.display = "none"; return; }
     const isRunning = s.status === "running";
     const pct = s.total > 0 ? Math.round((s.processed / s.total) * 100) : 0;
     const renameN = s.rename_needed || 0;
@@ -282,7 +286,8 @@ async function _pollImportBanner(feedId, refreshOnDone = false) {
       await Promise.all([_refreshEpisodeList(), _refreshFeedStats()]);
     }
   } catch (_) {
-    // 404 means no import job yet — that's expected on a fresh page load
+    // Only a genuine failure reaches here now — "no import job" comes back as a
+    // normal idle response rather than as an error to be swallowed.
   }
 }
 
@@ -1050,9 +1055,12 @@ async function viewFeedDetail(feedId) {
     e.target.value = "";
     if (!file) return;
 
-    // Refuse here what the server would refuse anyway: upload_feed_cover accepts
-    // an image of at most 10 MB. Checking first turns a round trip and a rejected
-    // preview into immediate feedback.
+    // Catch the obviously-wrong pick before spending a round trip on it. This is
+    // a convenience, not a validation: file.type is derived from the extension,
+    // so a text file renamed to .jpg still reports image/jpeg and sails through
+    // to the server, which is the only thing that actually decodes the bytes
+    // (upload_feed_cover runs PIL verify, and rejects over 10 MB). The failure
+    // path below therefore has to stay just as good as this one.
     if (!file.type.startsWith("image/")) {
       Toast.error("That file is not an image");
       return;

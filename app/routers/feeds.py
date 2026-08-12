@@ -127,18 +127,70 @@ def _merge_counts(primary_id: int, sub_ids: list[int], raw: dict[int, dict]) -> 
 # The TTL is a backstop for covers that appear by some path that forgets to
 # invalidate (a file dropped into the folder by hand, say). The explicit
 # invalidation below is what keeps it correct in normal use.
-_COVER_EXISTS_CACHE: dict[str, tuple[float, bool]] = {}
+_COVER_EXISTS_CACHE: dict[str, tuple[float, tuple[bool, bool]]] = {}
 _COVER_CACHE_TTL = 60.0
 
 
-def _has_local_cover(folder: str) -> bool:
+def _local_cover_state(folder: str) -> tuple[bool, bool]:
+    """
+    (a cover.jpg is on disk, that cover is the user's own artwork).
+
+    Both facts are resolved and cached together. Asking them separately would
+    put a second filesystem read on the same per-feed path the cache above
+    exists to keep off, undoing the measured win it was written for.
+    """
     now = time.monotonic()
     cached = _COVER_EXISTS_CACHE.get(folder)
     if cached is not None and now - cached[0] < _COVER_CACHE_TTL:
         return cached[1]
     exists = os.path.exists(os.path.join(folder, "cover.jpg"))
-    _COVER_EXISTS_CACHE[folder] = (now, exists)
-    return exists
+    user_owned = False
+    if exists:
+        from app.downloader import read_cover_source
+        user_owned = read_cover_source(folder) is None
+    state = (exists, user_owned)
+    _COVER_EXISTS_CACHE[folder] = (now, state)
+    return state
+
+
+def _has_local_cover(folder: str) -> bool:
+    return _local_cover_state(folder)[0]
+
+
+# Resolved artwork URL per feed id. Separate from the per-folder cache above
+# because the expensive part here is get_podcast_folder(), which costs a
+# settings query — and the callers include per-episode serialisation, where a
+# query each would be a page-load's worth of them.
+_FEED_COVER_URL_CACHE: dict[int, tuple[float, str | None]] = {}
+
+
+def feed_cover_url(feed, db) -> str | None:
+    """
+    The artwork URL a client should be handed for this feed: this server's cover
+    endpoint, the user's own custom URL, or nothing.
+
+    Never the feed's RSS artwork URL — serving that is what had browsers fetching
+    art straight from podcast hosts, disclosing the user's address and reading
+    times. Returning None where we hold no cover is deliberate: the client draws
+    its placeholder, which is a local, private failure. Pointing at a cover
+    endpoint that would 404 is not better; it just moves the noise.
+    """
+    if feed.custom_image_url:
+        return feed.custom_image_url
+    now = time.monotonic()
+    cached = _FEED_COVER_URL_CACHE.get(feed.id)
+    if cached is not None and now - cached[0] < _COVER_CACHE_TTL:
+        return cached[1]
+    url = None
+    try:
+        from app.downloader import get_podcast_folder
+        folder = get_podcast_folder(feed, db)
+        if folder and _has_local_cover(folder):
+            url = f"/api/feeds/{feed.id}/cover.jpg"
+    except Exception:
+        pass
+    _FEED_COVER_URL_CACHE[feed.id] = (now, url)
+    return url
 
 
 def invalidate_cover_cache(folder: str | None = None) -> None:
@@ -147,6 +199,10 @@ def invalidate_cover_cache(folder: str | None = None) -> None:
         _COVER_EXISTS_CACHE.clear()
     else:
         _COVER_EXISTS_CACHE.pop(folder, None)
+    # The per-feed URL cache is keyed by id, so a folder-scoped invalidation
+    # cannot find its entry. It is small, and a cover change is rare, so drop
+    # the lot rather than leave a stale URL behind whichever way it is called.
+    _FEED_COVER_URL_CACHE.clear()
 
 
 def _feed_out(feed: Feed, db: Session, counts: dict | None = None) -> FeedOut:
@@ -171,15 +227,22 @@ def _feed_out(feed: Feed, db: Session, counts: dict | None = None) -> FeedOut:
     data.needs_rename             = counts["needs_rename"]
     data.last_download_at         = counts["last_download_at"]
 
-    # Prefer local cover.jpg over remote URL when no custom_image_url is set
+    # Two questions that used to share one answer:
+    #   which URL should a client load?  — ours, whenever the file is on disk.
+    #   is that artwork the USER's?      — only if they set a custom URL or put
+    #                                      the file there themselves.
+    # Covers are now fetched for every feed, so answering the second with the
+    # first would have the settings panel claim custom artwork on all of them
+    # and offer to "remove" art the user never chose.
     has_custom_cover = bool(feed.custom_image_url)
     try:
         from app.downloader import get_podcast_folder
         folder = get_podcast_folder(feed, db)
         data.podcast_folder = folder
-        if not feed.custom_image_url and _has_local_cover(folder):
-            data.image_url = f"/api/feeds/{feed.id}/cover.jpg"
-            has_custom_cover = True
+        data.image_url = feed_cover_url(feed, db)
+        if not feed.custom_image_url:
+            _, user_owned = _local_cover_state(folder)
+            has_custom_cover = data.image_url is not None and user_owned
     except Exception:
         pass
     data.has_custom_cover = has_custom_cover
@@ -600,7 +663,7 @@ def delete_feed(feed_id: int, delete_files: bool = False, force: bool = False, d
         # user's files must not quietly remove it.
         if podcast_folder and os.path.isdir(podcast_folder):
             invalidate_cover_cache()
-            for fname in ("cover.jpg", "complete-feed.xml", "castcharm.json"):
+            for fname in ("cover.jpg", ".cover-source", "complete-feed.xml", "castcharm.json"):
                 p = os.path.join(podcast_folder, fname)
                 if os.path.exists(p):
                     try:
@@ -763,37 +826,36 @@ def get_feed_episodes(
     else:
         episodes = q.offset(offset).limit(limit).all()
 
-    # Pre-resolve effective image URL for each feed in the group (cover.jpg > custom > RSS URL)
-    feed_art: dict[int, str | None] = {}
-    try:
-        from app.downloader import get_podcast_folder
-        for fid, src in feed_map.items():
-            if src.custom_image_url:
-                feed_art[fid] = src.custom_image_url
-            else:
-                try:
-                    folder = get_podcast_folder(src, db)
-                    if folder and _has_local_cover(folder):
-                        feed_art[fid] = f"/api/feeds/{fid}/cover.jpg"
-                    else:
-                        feed_art[fid] = src.image_url
-                except Exception:
-                    feed_art[fid] = src.image_url
-    except Exception:
-        for fid, src in feed_map.items():
-            feed_art[fid] = src.custom_image_url or src.image_url
+    # Pre-resolve effective image URL for each feed in the group: cover.jpg, or
+    # the user's own custom URL, and otherwise nothing.
+    #
+    # The RSS artwork URL is deliberately NOT a fallback here. This endpoint
+    # builds a whole page of episode rows, so passing it through had every row
+    # fetch art from the podcast host — measured at 305 requests to one third
+    # party from a single feed page, each one disclosing the user's address and
+    # the moment they opened it. A missing cover is a placeholder now; the sync
+    # that fetches artwork will fill it in.
+    feed_art: dict[int, str | None] = {
+        fid: feed_cover_url(src, db) for fid, src in feed_map.items()
+    }
 
     result = []
     for ep in episodes:
         out = EpisodeOut.model_validate(ep)
         src = feed_map.get(ep.feed_id, feed)
         out.feed_title = src.title
-        out.feed_image_url = feed_art.get(ep.feed_id, src.image_url)
-        # Prefer local art sidecar over remote URL when no custom_image_url is set
-        if not ep.custom_image_url and ep.file_path:
-            art_path = os.path.splitext(ep.file_path)[0] + ".jpg"
-            if os.path.exists(art_path):
-                out.episode_image_url = f"/api/episodes/{ep.id}/cover.jpg"
+        out.feed_image_url = feed_art.get(ep.feed_id)
+        # Local art sidecar or nothing, never the RSS URL — same rule as
+        # _ep_out in episodes.py, and for the same reason: this endpoint builds
+        # a whole page of rows, so a remote value here is a page-load's worth of
+        # requests to a podcast host.
+        if not ep.custom_image_url:
+            art_path = os.path.splitext(ep.file_path)[0] + ".jpg" if ep.file_path else None
+            out.episode_image_url = (
+                f"/api/episodes/{ep.id}/cover.jpg"
+                if art_path and os.path.exists(art_path)
+                else None
+            )
         if ep.status == "downloaded" and ep.file_path and not os.path.exists(ep.file_path):
             out.file_missing = True
         result.append(out)
@@ -1218,7 +1280,13 @@ def import_status(feed_id: int, db: Session = Depends(get_db)):
     from app.importer import get_import_status
     status = get_import_status(feed_id)
     if status is None:
-        raise HTTPException(status_code=404, detail="No import job found for this feed")
+        # "Nothing is importing" is an answer, not a missing resource — the
+        # import status of this feed exists, and its value is idle. Raising 404
+        # for it put a failed request and a console error on every feed page
+        # load, which is noise in the one place you go looking when something is
+        # actually wrong. Shape matches import_preview_status below, which has
+        # always answered the same question this way.
+        return {"status": "idle"}
     return status
 
 
@@ -1343,6 +1411,11 @@ async def upload_feed_cover(
             raise HTTPException(status_code=400, detail="File is not a valid image")
         with open(cover_path, "wb") as f:
             f.write(contents)
+        # Hand ownership of this file to the user: dropping the source marker is
+        # what stops the next feed refresh from fetching the RSS artwork back
+        # over the top of what they just uploaded.
+        from app.downloader import clear_cover_source
+        clear_cover_source(folder)
         # The folder now has a cover that _feed_out would otherwise not notice
         # until the TTL lapsed.
         invalidate_cover_cache(folder)
@@ -1370,6 +1443,13 @@ def delete_feed_cover(feed_id: int, db: Session = Depends(get_db)):
         cover_path = os.path.join(folder, "cover.jpg")
         if os.path.exists(cover_path):
             os.remove(cover_path)
+        # Drop the marker too, so the folder is left in a clean state rather
+        # than one claiming a cover that is no longer there. The next refresh
+        # re-fetches the RSS artwork, which is the art the user is asking to
+        # fall back to — served by us, so removing a custom cover does not
+        # quietly put the browser back in touch with the podcast host.
+        from app.downloader import clear_cover_source
+        clear_cover_source(folder)
         invalidate_cover_cache(folder)
     except Exception:
         pass
