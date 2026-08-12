@@ -157,12 +157,52 @@ def _has_local_cover(folder: str) -> bool:
     return _local_cover_state(folder)[0]
 
 
+# Resolved artwork URL per feed id. Separate from the per-folder cache above
+# because the expensive part here is get_podcast_folder(), which costs a
+# settings query — and the callers include per-episode serialisation, where a
+# query each would be a page-load's worth of them.
+_FEED_COVER_URL_CACHE: dict[int, tuple[float, str | None]] = {}
+
+
+def feed_cover_url(feed, db) -> str | None:
+    """
+    The artwork URL a client should be handed for this feed: this server's cover
+    endpoint, the user's own custom URL, or nothing.
+
+    Never the feed's RSS artwork URL — serving that is what had browsers fetching
+    art straight from podcast hosts, disclosing the user's address and reading
+    times. Returning None where we hold no cover is deliberate: the client draws
+    its placeholder, which is a local, private failure. Pointing at a cover
+    endpoint that would 404 is not better; it just moves the noise.
+    """
+    if feed.custom_image_url:
+        return feed.custom_image_url
+    now = time.monotonic()
+    cached = _FEED_COVER_URL_CACHE.get(feed.id)
+    if cached is not None and now - cached[0] < _COVER_CACHE_TTL:
+        return cached[1]
+    url = None
+    try:
+        from app.downloader import get_podcast_folder
+        folder = get_podcast_folder(feed, db)
+        if folder and _has_local_cover(folder):
+            url = f"/api/feeds/{feed.id}/cover.jpg"
+    except Exception:
+        pass
+    _FEED_COVER_URL_CACHE[feed.id] = (now, url)
+    return url
+
+
 def invalidate_cover_cache(folder: str | None = None) -> None:
     """Forget cached cover state — for one folder, or all of them."""
     if folder is None:
         _COVER_EXISTS_CACHE.clear()
     else:
         _COVER_EXISTS_CACHE.pop(folder, None)
+    # The per-feed URL cache is keyed by id, so a folder-scoped invalidation
+    # cannot find its entry. It is small, and a cover change is rare, so drop
+    # the lot rather than leave a stale URL behind whichever way it is called.
+    _FEED_COVER_URL_CACHE.clear()
 
 
 def _feed_out(feed: Feed, db: Session, counts: dict | None = None) -> FeedOut:
@@ -199,14 +239,10 @@ def _feed_out(feed: Feed, db: Session, counts: dict | None = None) -> FeedOut:
         from app.downloader import get_podcast_folder
         folder = get_podcast_folder(feed, db)
         data.podcast_folder = folder
+        data.image_url = feed_cover_url(feed, db)
         if not feed.custom_image_url:
-            exists, user_owned = _local_cover_state(folder)
-            # The RSS artwork URL is never passed on to clients, even when we
-            # have not managed to fetch it: doing so is what put the browser in
-            # direct contact with the podcast host. A feed whose art we could
-            # not retrieve shows a placeholder, and each sync tries again.
-            data.image_url = f"/api/feeds/{feed.id}/cover.jpg" if exists else None
-            has_custom_cover = exists and user_owned
+            _, user_owned = _local_cover_state(folder)
+            has_custom_cover = data.image_url is not None and user_owned
     except Exception:
         pass
     data.has_custom_cover = has_custom_cover
@@ -799,25 +835,9 @@ def get_feed_episodes(
     # party from a single feed page, each one disclosing the user's address and
     # the moment they opened it. A missing cover is a placeholder now; the sync
     # that fetches artwork will fill it in.
-    feed_art: dict[int, str | None] = {}
-    try:
-        from app.downloader import get_podcast_folder
-        for fid, src in feed_map.items():
-            if src.custom_image_url:
-                feed_art[fid] = src.custom_image_url
-            else:
-                try:
-                    folder = get_podcast_folder(src, db)
-                    feed_art[fid] = (
-                        f"/api/feeds/{fid}/cover.jpg"
-                        if folder and _has_local_cover(folder)
-                        else None
-                    )
-                except Exception:
-                    feed_art[fid] = None
-    except Exception:
-        for fid, src in feed_map.items():
-            feed_art[fid] = src.custom_image_url
+    feed_art: dict[int, str | None] = {
+        fid: feed_cover_url(src, db) for fid, src in feed_map.items()
+    }
 
     result = []
     for ep in episodes:
@@ -825,11 +845,17 @@ def get_feed_episodes(
         src = feed_map.get(ep.feed_id, feed)
         out.feed_title = src.title
         out.feed_image_url = feed_art.get(ep.feed_id)
-        # Prefer local art sidecar over remote URL when no custom_image_url is set
-        if not ep.custom_image_url and ep.file_path:
-            art_path = os.path.splitext(ep.file_path)[0] + ".jpg"
-            if os.path.exists(art_path):
-                out.episode_image_url = f"/api/episodes/{ep.id}/cover.jpg"
+        # Local art sidecar or nothing, never the RSS URL — same rule as
+        # _ep_out in episodes.py, and for the same reason: this endpoint builds
+        # a whole page of rows, so a remote value here is a page-load's worth of
+        # requests to a podcast host.
+        if not ep.custom_image_url:
+            art_path = os.path.splitext(ep.file_path)[0] + ".jpg" if ep.file_path else None
+            out.episode_image_url = (
+                f"/api/episodes/{ep.id}/cover.jpg"
+                if art_path and os.path.exists(art_path)
+                else None
+            )
         if ep.status == "downloaded" and ep.file_path and not os.path.exists(ep.file_path):
             out.file_missing = True
         result.append(out)
@@ -1254,7 +1280,13 @@ def import_status(feed_id: int, db: Session = Depends(get_db)):
     from app.importer import get_import_status
     status = get_import_status(feed_id)
     if status is None:
-        raise HTTPException(status_code=404, detail="No import job found for this feed")
+        # "Nothing is importing" is an answer, not a missing resource — the
+        # import status of this feed exists, and its value is idle. Raising 404
+        # for it put a failed request and a console error on every feed page
+        # load, which is noise in the one place you go looking when something is
+        # actually wrong. Shape matches import_preview_status below, which has
+        # always answered the same question this way.
+        return {"status": "idle"}
     return status
 
 

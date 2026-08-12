@@ -86,15 +86,25 @@ def _ep_out(ep: Episode) -> EpisodeOut:
         # Our own cover endpoint, never the feed's RSS artwork URL. Handing that
         # out made every episode row fetch art from the podcast host directly,
         # which disclosed the user's IP and reading habits to a third party — one
-        # feed page here issued 305 such requests. If no cover has been fetched
-        # yet the endpoint 404s and the client falls back to its placeholder,
-        # which is a local, private failure rather than a remote one.
-        out.feed_image_url = f"/api/feeds/{ep.feed_id}/cover.jpg"
-    # Prefer local art sidecar over remote URL when no custom_image_url is set
-    if not ep.custom_image_url and ep.file_path:
-        art_path = os.path.splitext(ep.file_path)[0] + ".jpg"
-        if os.path.exists(art_path):
-            out.episode_image_url = f"/api/episodes/{ep.id}/cover.jpg"
+        # feed page here issued 305 such requests. Resolved through the shared
+        # helper, which is cached per feed: the folder lookup behind it costs a
+        # settings query, and this runs once per episode.
+        from app.routers.feeds import feed_cover_url
+        from sqlalchemy.orm import object_session
+        out.feed_image_url = feed_cover_url(ep.feed, object_session(ep))
+    # Our local art sidecar, or nothing — never the RSS episode image URL.
+    # Passing that through is what kept episode rows fetching art from podcast
+    # hosts; it is also frequently not an image at all (This American Life's
+    # feed gives its own home page here, which the browser blocks as an opaque
+    # response). Rows without a sidecar fall back to the feed cover, which is
+    # served from here too.
+    if not ep.custom_image_url:
+        art_path = os.path.splitext(ep.file_path)[0] + ".jpg" if ep.file_path else None
+        out.episode_image_url = (
+            f"/api/episodes/{ep.id}/cover.jpg"
+            if art_path and os.path.exists(art_path)
+            else None
+        )
     # Flag downloaded episodes whose file has gone missing from disk
     if ep.status == "downloaded" and ep.file_path and not os.path.exists(ep.file_path):
         out.file_missing = True

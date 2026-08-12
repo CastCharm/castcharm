@@ -1,4 +1,5 @@
 import logging
+import os
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -17,7 +18,19 @@ def _episode_out(ep: Episode, db: Session) -> EpisodeOut:
     feed = db.get(Feed, ep.feed_id)
     d = EpisodeOut.model_validate(ep)
     d.feed_title = feed.title if feed else None
-    d.feed_image_url = feed.image_url if feed else None
+    # Artwork always resolves to this server, never to the podcast host — the
+    # same rule the episodes and feeds routers follow. This one served RSS URLs
+    # straight from the feed record, so a playlist was one more page quietly
+    # telling third parties who was reading it and when.
+    from app.routers.feeds import feed_cover_url
+    d.feed_image_url = feed_cover_url(feed, db) if feed else None
+    if not ep.custom_image_url:
+        art_path = os.path.splitext(ep.file_path)[0] + ".jpg" if ep.file_path else None
+        d.episode_image_url = (
+            f"/api/episodes/{ep.id}/cover.jpg"
+            if art_path and os.path.exists(art_path)
+            else None
+        )
     return d
 
 
