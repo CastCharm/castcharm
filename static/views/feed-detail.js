@@ -134,6 +134,72 @@ async function _refreshFeedStats() {
   return updated;
 }
 
+// The one statement of what the feed header art shows. The initial render and
+// every in-place repaint go through it, so the two cannot drift apart.
+function _feedHeaderArtHtml(feed) {
+  return artImg(feed.custom_image_url || feed.image_url, "", "", !feed.active);
+}
+
+// Repaints the header art from the feed object. Callers update that object
+// first; art is never derived from anything else, so there is a single place
+// where "the current artwork" lives.
+function _paintFeedHeaderArt(feed) {
+  const wrap = document.querySelector(".feed-header-art");
+  if (wrap) wrap.innerHTML = _feedHeaderArtHtml(feed);
+}
+
+// Uploaded covers are served from a stable path (/api/feeds/{id}/cover.jpg), so
+// replacing one changes the bytes while the URL stays identical and the browser
+// keeps showing what it already cached. Stamping the feed's URLs once, at the
+// moment we learn the art changed, keeps every later render correct without each
+// render site having to remember to do it.
+//
+// Only our own cover endpoint is touched. An RSS-provided artwork URL points at
+// someone else's server and may carry a signature that a stray query parameter
+// would invalidate — and it does not need busting anyway, since a new one there
+// arrives as a genuinely different URL.
+function _bustFeedArtCache(feed) {
+  const stamp = `v=${Date.now()}`;
+  for (const key of ["image_url", "custom_image_url"]) {
+    const url = feed[key];
+    if (typeof url !== "string" || !/\/api\/feeds\/\d+\/cover\.jpg/.test(url)) continue;
+    const [base, hash] = url.split("#");
+    const busted = base.replace(/([?&])v=\d+(&|$)/, "$1").replace(/[?&]$/, "");
+    feed[key] = busted + (busted.includes("?") ? "&" : "?") + stamp + (hash ? `#${hash}` : "");
+  }
+}
+
+// The settings-form thumbnail, stated once for the same reason as the header
+// art. It is an <img> or a placeholder <div> depending on whether there is any
+// artwork at all, which is why updates replace the element rather than assign a
+// src: a feed getting its first cover has no <img> to assign to, and setting one
+// on the placeholder div did nothing at all.
+function _feedArtPreviewHtml(feed) {
+  const box = "width:56px;height:56px;border-radius:8px;flex-shrink:0";
+  // Sanitised like every other artwork URL the app renders: image_url can come
+  // straight from a podcast's RSS, and this one was being dropped into an
+  // attribute raw.
+  const url = _safeImgUrl(feed.image_url);
+  return url
+    ? `<img id="feed-art-preview" src="${url}" style="${box};object-fit:cover" />`
+    : `<div id="feed-art-preview" style="${box};background:var(--bg-3);display:flex;align-items:center;justify-content:center">${_PODCAST_SVG}</div>`;
+}
+
+// Adopts the FeedOut returned by a cover upload/removal and repaints everything
+// that shows artwork. The endpoints answer with the feed as it now stands, so
+// this takes their word for it rather than reconstructing the new state here and
+// hoping the two agree. Mutated in place: window._epState.feed and the wiring
+// closures all hold this same object.
+function _applyFeedArtUpdate(feed, updated) {
+  Object.assign(feed, updated);
+  _bustFeedArtCache(feed);
+  if (window._epState) window._epState.feed = feed;
+
+  _paintFeedHeaderArt(feed);
+  const preview = document.getElementById("feed-art-preview");
+  if (preview) preview.outerHTML = _feedArtPreviewHtml(feed);
+}
+
 function _renderFeedErrorBanner(feed) {
   const banner = document.getElementById("feed-error-banner");
   if (!banner) return;
@@ -417,7 +483,7 @@ async function viewFeedDetail(feedId) {
 
       <!-- Feed header -->
       <div class="feed-header">
-        <div class="feed-header-art">${artImg(feed.custom_image_url || feed.image_url, "", "", !feed.active)}</div>
+        <div class="feed-header-art">${_feedHeaderArtHtml(feed)}</div>
         <div class="feed-header-info">
           <div class="feed-header-title">${escHTML(feed.title || feed.url)}</div>
           <div class="feed-header-author">${escHTML(feed.author || "")}</div>
@@ -536,11 +602,7 @@ async function viewFeedDetail(feedId) {
             <div class="form-group">
               <label class="form-label">Custom Cover Art</label>
               <div style="display:flex;gap:10px;align-items:center">
-                ${feed.image_url
-                  ? `<img id="feed-art-preview" src="${feed.image_url}"
-                          style="width:56px;height:56px;border-radius:8px;object-fit:cover;flex-shrink:0"
-                          />`
-                  : `<div id="feed-art-preview" style="width:56px;height:56px;border-radius:8px;background:var(--bg-3);flex-shrink:0;display:flex;align-items:center;justify-content:center">${_PODCAST_SVG}</div>`}
+                ${_feedArtPreviewHtml(feed)}
                 <div style="display:flex;flex-direction:column;gap:6px">
                   <input type="file" id="feed-cover-file" accept="image/*" style="display:none" />
                   <button type="button" class="btn btn-ghost btn-sm" id="btn-choose-cover">
@@ -972,8 +1034,7 @@ async function viewFeedDetail(feedId) {
       Toast.success(`Feed ${feed.active ? "resumed" : "paused"}`);
       const toggleBtn = document.getElementById("btn-toggle-active");
       if (toggleBtn) toggleBtn.textContent = feed.active ? "Pause Feed" : "Resume Feed";
-      const artWrap = document.querySelector(".feed-header-art");
-      if (artWrap) artWrap.innerHTML = artImg(feed.custom_image_url || feed.image_url, "", "", !feed.active);
+      _paintFeedHeaderArt(feed);
     } catch (e) { Toast.error(e.message); }
   });
 
@@ -983,29 +1044,54 @@ async function viewFeedDetail(feedId) {
 
   document.getElementById("feed-cover-file").addEventListener("change", async (e) => {
     const file = e.target.files[0];
+    // Cleared so that re-picking the same file fires "change" again — after a
+    // rejected upload the obvious next move is to retry the same file, and the
+    // input used to sit there silently because its value had not changed.
+    e.target.value = "";
     if (!file) return;
+
+    // Refuse here what the server would refuse anyway: upload_feed_cover accepts
+    // an image of at most 10 MB. Checking first turns a round trip and a rejected
+    // preview into immediate feedback.
+    if (!file.type.startsWith("image/")) {
+      Toast.error("That file is not an image");
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      Toast.error("Image too large (max 10 MB)");
+      return;
+    }
+
     const btn = document.getElementById("btn-choose-cover");
+    const preview = document.getElementById("feed-art-preview");
+    const previousPreview = preview?.tagName === "IMG" ? preview.src : null;
+
     btn.disabled = true;
     btn.textContent = "Uploading…";
-    // Show local preview immediately
-    const preview = document.getElementById("feed-art-preview");
-    if (preview?.tagName === "IMG") preview.src = URL.createObjectURL(file);
+
+    // Local preview while the upload is in flight, rolled back if the server
+    // refuses the file: leaving a rejected image on screen states that the
+    // upload worked.
+    const objectUrl = URL.createObjectURL(file);
+    if (preview?.tagName === "IMG") preview.src = objectUrl;
+
     try {
-      await API.uploadFeedCover(id, file);
-      feed.has_custom_cover = true;
+      _applyFeedArtUpdate(feed, await API.uploadFeedCover(id, file));
       Toast.success("Cover art updated");
-      btn.disabled = false;
-      btn.textContent = "Replace image…";
+
       const hint = document.getElementById("feed-cover-hint");
       if (hint) hint.textContent = "Using custom cover art.";
       if (!document.getElementById("btn-remove-cover")) {
         btn.insertAdjacentHTML("afterend", `<button type="button" class="btn btn-ghost btn-sm" id="btn-remove-cover" style="color:var(--error)">Remove custom art</button>`);
         document.getElementById("btn-remove-cover").addEventListener("click", removeCoverHandler);
       }
-    } catch (e) {
+    } catch (err) {
+      if (preview?.tagName === "IMG" && previousPreview !== null) preview.src = previousPreview;
+      Toast.error(err.message);
+    } finally {
+      URL.revokeObjectURL(objectUrl);
       btn.disabled = false;
       btn.textContent = feed.has_custom_cover ? "Replace image…" : "Choose image…";
-      Toast.error(e.message);
     }
   });
 
@@ -1013,11 +1099,8 @@ async function viewFeedDetail(feedId) {
     const btn = document.getElementById("btn-remove-cover");
     if (btn) btn.disabled = true;
     try {
-      await API.removeFeedCover(id);
-      feed.has_custom_cover = false;
+      _applyFeedArtUpdate(feed, await API.removeFeedCover(id));
       Toast.success("Custom cover art removed");
-      const preview = document.getElementById("feed-art-preview");
-      if (preview?.tagName === "IMG") preview.src = feed.image_url || "";
       const chooseBtn = document.getElementById("btn-choose-cover");
       if (chooseBtn) chooseBtn.textContent = "Choose image…";
       const hint = document.getElementById("feed-cover-hint");
