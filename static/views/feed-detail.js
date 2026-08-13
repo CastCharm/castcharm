@@ -453,7 +453,14 @@ async function viewFeedDetail(feedId) {
   // feed page can't accidentally trigger poll/restore on this one.
   window._feedDetailDL = null;
 
-  const id = Number(feedId);
+  const id = routeId(feedId);
+
+  // A hash that cannot name a feed goes back to the list rather than on to the
+  // requests below, which would all fail in the same uninformative way.
+  if (id === null) {
+    Router.navigate("/feeds");
+    return;
+  }
 
   // Block navigation to a feed that is currently being deleted
   if (window._deletingFeedIds?.has(id)) {
@@ -1907,7 +1914,7 @@ function episodeRow(ep, feed, { draggable: isDraggable = false, hideSeqNumber = 
         ${ep.imported ? `<span class="badge badge-imported" title="Imported from local file">Imported</span>` : ""}
         ${ep.file_missing ? `<span class="badge badge-error" title="File was deleted from disk">File missing</span>` : ""}
         ${!ep.enclosure_url && !isDownloaded ? `<span class="badge badge-default" title="No download URL available for this episode">No URL</span>` : ""}
-        ${ep.error_message ? `<span style="color:var(--error)" title="${ep.error_message}">⚠ ${ep.error_message.slice(0,60)}</span>` : ""}
+        ${ep.error_message ? `<span style="color:var(--error)" title="${escHTML(ep.error_message)}">⚠ ${escHTML(ep.error_message.slice(0,60))}</span>` : ""}
       </div>
       ${progressHTML}
       ${listenHTML}
@@ -3014,9 +3021,9 @@ function showImportFilesModal(feedId, feed) {
           <div style="display:flex;align-items:flex-start;gap:7px">
             ${statusDot}
             <div style="min-width:0">
-              <div style="word-break:break-all;line-height:1.3">${f.filename}</div>
+              <div style="word-break:break-all;line-height:1.3">${escHTML(f.filename)}</div>
               ${f.title && f.title !== f.filename.replace(/\.[^.]+$/, "")
-                ? `<div style="color:var(--text-3);font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${f.title.replace(/"/g, "&quot;")}">${f.title}${titleSrc}</div>`
+                ? `<div style="color:var(--text-3);font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${escHTML(f.title)}">${escHTML(f.title)}${titleSrc}</div>`
                 : ""}
               ${infoLine ? `<div style="color:var(--text-3);font-size:11px;margin-top:1px">${infoLine}</div>` : ""}
             </div>

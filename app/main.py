@@ -435,6 +435,22 @@ app.include_router(playlists_router)
 app.include_router(player_router)
 
 
+@app.exception_handler(OverflowError)
+async def _overflow_to_404(request: StarletteRequest, exc: OverflowError):
+    """Turn out-of-range path ids into a 404 instead of a 500.
+
+    FastAPI validates `feed_id: int` with Python's unbounded int, so an id of
+    2**63 or more passes validation and only blows up further down, when SQLite
+    refuses to bind it. That surfaced as an unhandled 500 plus a ~200-line
+    traceback per request, on every router with an integer path param.
+
+    404 is the honest answer: the id cannot name a row, because no row can ever
+    have it. Handled centrally rather than per-route so routes added later are
+    covered without anyone having to remember this.
+    """
+    return JSONResponse(status_code=404, content={"detail": "Not found"})
+
+
 @app.get("/api/limits", response_model=LimitsOut, tags=["system"])
 def get_limits():
     """Publish the request ceilings so clients can size themselves to this server.
