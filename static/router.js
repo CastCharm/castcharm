@@ -54,6 +54,26 @@ const Router = {
   },
 };
 
+// Route params arrive as raw text from the URL hash, and the pattern matcher
+// accepts any non-slash segment — so "#/feeds/abc" reaches a view just as
+// readily as "#/feeds/9". Views feed the value straight into request URLs, so
+// an unchecked param becomes a burst of requests for /api/feeds/NaN, every one
+// of them a guaranteed 422.
+//
+// The upper bound matters as much as the lower: past 2**53 a JS number can no
+// longer represent consecutive integers, so such a value cannot name a row even
+// in principle, and sending it on only reaches the server to be rejected.
+//
+// Returns a usable row id, or null for anything that cannot be one.
+// Digits are tested before Number() rather than after, because Number() is more
+// permissive than row ids are: it reads "0x10" as 16 and trims whitespace, so
+// "#/feeds/0x10" would quietly open feed 16.
+function routeId(raw) {
+  if (!/^\d+$/.test(String(raw ?? ""))) return null;
+  const id = Number(raw);
+  return id > 0 && id <= Number.MAX_SAFE_INTEGER ? id : null;
+}
+
 window.addEventListener("hashchange", (e) => {
   closeSidebar();
   if (window._settingsDirty) {

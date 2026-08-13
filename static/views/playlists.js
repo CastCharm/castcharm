@@ -102,7 +102,11 @@ async function _playPlaylist(id) {
 
 // viewPlaylistDetail — full-page route handler for /playlists/:id
 async function viewPlaylistDetail(playlistId) {
-  const id = Number(playlistId);
+  const id = routeId(playlistId);
+  if (id === null) {
+    Router.navigate("/playlists");
+    return;
+  }
   const el = document.getElementById("content");
   el.innerHTML = `<div class="page pl-detail-page"><p style="color:var(--text-3);font-size:13px">Loading...</p></div>`;
 
