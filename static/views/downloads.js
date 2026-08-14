@@ -27,6 +27,10 @@ let _dlPollInterval = null;
 let _dlPollHadItems = false; // true once we've seen a non-zero queue during this session
 let _downloadedPollInterval = null;
 let _failedPollInterval = null;
+// Episodes whose finish animation is running. Pinned in the window for its
+// duration, so a poll tick in the middle cannot discard the row out from under
+// it and strand the callback that unpins it.
+const _dlLeaving = new Set();
 
 function _stopDLPoll() {
   if (_dlPollInterval) {
@@ -78,40 +82,34 @@ async function _doDownloadedPollTick() {
 
     if (window._dlData) window._dlData.downloaded = episodes;
 
-    // Determine which episode IDs are already rendered in the DOM.
-    const domIds = new Set(
-      [...list.querySelectorAll(".episode-item")]
-        .map(r => Number(r.id.replace("dl-ep-", "")))
-    );
-
-    const newEps = episodes.filter(e => !domIds.has(e.id));
-    if (newEps.length === 0) return; // nothing to do
+    // Compared against the model, not against the rendered rows — with a window
+    // in place the DOM holds a screenful, so "not currently rendered" and "new"
+    // are no longer the same question.
+    const knownIds = new Set((_dlVList?.items || []).map((e) => e.id));
+    const newEps = episodes.filter((e) => !knownIds.has(e.id));
+    if (newEps.length === 0) return;
 
     // When the list was previously empty (just an empty-state placeholder),
     // do a full re-render so the "Clear List" toolbar is included.  No row
     // animation needed — the whole tab fades in via _fadeInTabContent.
-    if (domIds.size === 0) {
+    if (knownIds.size === 0) {
       const tc = document.getElementById("dl-tab-content");
       if (tc) {
         tc.innerHTML = _renderDownloadedTab(episodes);
         _fadeInTabContent(tc);
+        _renderDLTabList(episodes);
       }
       return;
     }
 
-    // Incremental update: prepend new rows and trim excess from the bottom.
-    // Animate each new row in — reverse of animateRemove (height expand + fade)
-    // so the entry feels consistent with how items depart from In Progress.
-    list.insertAdjacentHTML("afterbegin", newEps.map(renderDLRow).join(""));
+    // The cap is applied to the model rather than by deleting rows off the
+    // bottom of the DOM, so the list stays bounded regardless of how much of it
+    // is currently built.
+    _renderDLTabList(episodes.slice(0, 100));
     for (const ep of newEps) {
-      const row = document.getElementById(`dl-ep-${ep.id}`);
+      const row = _dlVList?.node(ep.id);
       if (row) animateEnter(row);
     }
-
-    // Trim rows beyond the fetch limit from the bottom so the list doesn't
-    // grow unboundedly as more episodes complete.
-    const allRows = [...list.querySelectorAll(".episode-item")];
-    for (let i = 100; i < allRows.length; i++) allRows[i].remove();
 
     // Keep the "N shown" label in the toolbar in sync.
     const countEl = list.closest(".card")?.querySelector("span[data-shown]");
@@ -151,21 +149,21 @@ async function _doFailedPollTick() {
     if (!list || failed.length === 0 || prev.length === 0) {
       tc.innerHTML = _renderFailedTab(failed);
       _wireFailedActions();
+      _renderDLTabList(failed);
       return;
     }
 
-    // Incremental: prepend new rows, remove rows no longer failed.
+    // The model decides which rows exist; only the entry/exit flourishes still
+    // touch the DOM, and then only for rows that happen to be built.
     for (const row of [...list.querySelectorAll(".episode-item")]) {
       const id = Number(row.id.replace("dl-ep-", ""));
       if (!currentIds.has(id)) animateRemove(row);
     }
     const newEps = failed.filter(e => !prevIds.has(e.id));
-    if (newEps.length > 0) {
-      list.insertAdjacentHTML("afterbegin", newEps.map(renderDLRow).join(""));
-      for (const ep of newEps) {
-        const row = document.getElementById(`dl-ep-${ep.id}`);
-        if (row) animateEnter(row);
-      }
+    _renderDLTabList(failed);
+    for (const ep of newEps) {
+      const row = _dlVList?.node(ep.id);
+      if (row) animateEnter(row);
     }
     const retryBtn = document.getElementById("btn-retry-all-tab");
     if (retryBtn) retryBtn.innerHTML = `${svg('<polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.5"/>')} Retry All (${failed.length})`;
@@ -228,6 +226,10 @@ async function viewDownloads() {
         ${renderAvailableFeeds(available)}
       </div>
     </div>`;
+
+  // The Available tab is the landing tab, and its list host above is an empty
+  // shell like every other.
+  _renderAvailableList(available);
 
   window._doGlobalUnplayed = async () => {
     try {
@@ -295,8 +297,32 @@ function renderAvailableFeeds(feeds) {
 
   const actionBar = globalBtns ? `<div style="display:flex;justify-content:flex-end;padding:10px 14px;border-bottom:1px solid var(--border)">${globalBtns}</div>` : "";
 
-  return `<div class="card">${actionBar}<div class="episode-list">${feeds.map((f) => `
-    <div class="episode-item">
+  return `<div class="card">${actionBar}<div class="episode-list" id="dl-available-list"></div></div>`;
+}
+
+// Extracted from the inline template above so the windowed list has a row
+// renderer to call. One row per feed with undownloaded episodes, which is
+// bounded by library size — i.e. unbounded for an archival library.
+function renderAvailableRow(f) {
+  const dlIcon = svg('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>');
+  const caret = svg('<polyline points="6 9 12 15 18 9"/>');
+  const unplayed = f.unplayed_available_count || 0;
+  const actions = unplayed > 0
+    ? `<div class="ep-more-wrap" data-action="stop-prop">
+        <button class="btn btn-primary btn-sm btn-split-main" data-action="dl-feed" data-feed-id="${f.id}" data-mode="unplayed">
+          ${dlIcon} Unplayed (${unplayed})
+        </button>
+        <button class="btn btn-primary btn-sm btn-split-caret" data-action="toggle-more-wrap">${caret}</button>
+        <div class="ep-more-dropdown" style="right:0;left:auto;min-width:180px">
+          <button data-action="dl-feed" data-feed-id="${f.id}" data-mode="unplayed">Download Unplayed (${unplayed})</button>
+          <button data-action="dl-feed" data-feed-id="${f.id}" data-mode="all">Download All (${f.available_count})</button>
+        </div>
+      </div>`
+    : `<button class="btn btn-primary btn-sm" data-action="dl-feed" data-feed-id="${f.id}" data-mode="all">
+        ${dlIcon} Download All (${f.available_count})
+      </button>`;
+
+  return `<div class="episode-item" id="dl-avail-${f.id}">
       <div class="episode-art" style="cursor:pointer" data-action="navigate" data-path="/feeds/${f.id}">
         ${f.image_url
           ? `<img src="${_safeImgUrl(f.image_url)}" alt="" loading="lazy" /><div class="episode-art-placeholder" style="display:none">${_PODCAST_SVG}</div>`
@@ -305,34 +331,31 @@ function renderAvailableFeeds(feeds) {
       <div class="episode-info" style="cursor:pointer" data-action="navigate" data-path="/feeds/${f.id}">
         <div class="episode-title">${escHTML(f.title || f.url)}</div>
         <div class="episode-meta">
-          ${f.downloaded_count > 0 ? `<span>${f.downloaded_count} downloaded</span>` : ""}
-          <span>${f.available_count} not downloaded</span>
+          ${/* One span, not two: .episode-meta is a flex row with a 10px gap, so
+                a comma on a separate child would sit an awkward distance from
+                the words it joins. */""}
+          <span>${f.downloaded_count > 0 ? `${f.downloaded_count} downloaded, ` : ""}${f.available_count} not downloaded</span>
         </div>
       </div>
-      <div class="episode-actions">
-        ${(() => {
-          const dlIcon = svg('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>');
-          const caret = svg('<polyline points="6 9 12 15 18 9"/>');
-          const unplayed = f.unplayed_available_count || 0;
-          if (unplayed > 0) {
-            return `<div class="ep-more-wrap" data-action="stop-prop">
-              <button class="btn btn-primary btn-sm btn-split-main" data-action="dl-feed" data-feed-id="${f.id}" data-mode="unplayed">
-                ${dlIcon} Unplayed (${unplayed})
-              </button>
-              <button class="btn btn-primary btn-sm btn-split-caret" data-action="toggle-more-wrap">${caret}</button>
-              <div class="ep-more-dropdown" style="right:0;left:auto;min-width:180px">
-                <button data-action="dl-feed" data-feed-id="${f.id}" data-mode="unplayed">Download Unplayed (${unplayed})</button>
-                <button data-action="dl-feed" data-feed-id="${f.id}" data-mode="all">Download All (${f.available_count})</button>
-              </div>
-            </div>`;
-          } else {
-            return `<button class="btn btn-primary btn-sm" data-action="dl-feed" data-feed-id="${f.id}" data-mode="all">
-              ${dlIcon} Download All (${f.available_count})
-            </button>`;
-          }
-        })()}
-      </div>
-    </div>`).join("")}</div></div>`;
+      <div class="episode-actions">${actions}</div>
+    </div>`;
+}
+
+let _dlAvailVList = null;
+
+function _renderAvailableList(feeds) {
+  const host = document.getElementById("dl-available-list");
+  if (!host) return;
+  if (!_dlAvailVList || _dlAvailVList.destroyed || _dlAvailVList.host !== host) {
+    _dlAvailVList = VList.mount(host, {
+      items: feeds || [],
+      key: (f) => f.id,
+      render: renderAvailableRow,
+      estimateHeight: 88,
+    });
+  } else {
+    _dlAvailVList.setItems(feeds || []);
+  }
 }
 
 function _showMoreFooter(tabId, currentCount, offset) {
@@ -355,7 +378,7 @@ function _renderInProgressTab(episodes, trueTotal) {
            Cancel All
          </button>
        </div>` : "";
-  return `<div class="card">${bar}<div class="episode-list" id="dl-episode-list">${renderDLList(episodes)}</div>${_showMoreFooter("inprogress", episodes.length, 0)}</div>`;
+  return `<div class="card">${bar}<div class="episode-list" id="dl-episode-list"></div>${_showMoreFooter("inprogress", episodes.length, 0)}</div>`;
 }
 
 function _renderDownloadedTab(episodes, offset = 0) {
@@ -367,7 +390,7 @@ function _renderDownloadedTab(episodes, offset = 0) {
            Clear List
          </button>
        </div>` : "";
-  return `<div class="card">${bar}<div class="episode-list" id="dl-episode-list">${renderDLList(episodes)}</div>${_showMoreFooter("downloaded", episodes.length, offset)}</div>`;
+  return `<div class="card">${bar}<div class="episode-list" id="dl-episode-list"></div>${_showMoreFooter("downloaded", episodes.length, offset)}</div>`;
 }
 
 function _renderFailedTab(episodes, offset = 0) {
@@ -382,7 +405,7 @@ function _renderFailedTab(episodes, offset = 0) {
            Remove All
          </button>
        </div>` : "";
-  return `<div class="card">${bar}<div class="episode-list" id="dl-episode-list">${renderDLList(episodes)}</div>${_showMoreFooter("failed", episodes.length, offset)}</div>`;
+  return `<div class="card">${bar}<div class="episode-list" id="dl-episode-list"></div>${_showMoreFooter("failed", episodes.length, offset)}</div>`;
 }
 
 window._dlLoadMore = async function(tabId, offset) {
@@ -407,9 +430,12 @@ window._dlLoadMore = async function(tabId, offset) {
     const list = document.getElementById("dl-episode-list");
     if (!list) return;
 
-    // Replace show-more bar with new rows + potentially new show-more bar
+    // Replace show-more bar with new rows + potentially new show-more bar.
+    // The page grows by extending the model; the window then decides how much
+    // of it is actually built.
     showMoreBar?.remove();
-    list.insertAdjacentHTML("beforeend", episodes.map(renderDLRow).join(""));
+    const grown = [...(_dlVList?.items || []), ...episodes];
+    _renderDLTabList(grown);
     if (episodes.length >= 100) {
       list.closest(".card").insertAdjacentHTML("beforeend", `<div id="dl-show-more-bar" style="padding:12px 14px;text-align:center;border-top:1px solid var(--border)">
         <button class="btn btn-ghost btn-sm" data-action="dl-load-more" data-tab="${tabId}" data-offset="${offset + episodes.length}">
@@ -421,8 +447,8 @@ window._dlLoadMore = async function(tabId, offset) {
     // Update shown count label
     const countEl = document.querySelector("#dl-tab-content [data-shown]");
     if (countEl && tabId === "downloaded") {
-      const total = list.querySelectorAll(".episode-item").length;
-      countEl.textContent = `${total} shown`;
+      // Counted from the model — the DOM now holds a screenful, not the list.
+      countEl.textContent = `${grown.length} shown`;
     }
   } catch (e) { Toast.error(e.message); }
 };
@@ -438,6 +464,7 @@ async function _refreshDownloadedTab() {
     const episodes = await API.getEpisodes(_dlFetchParams());
     if (window._dlData) window._dlData.downloaded = episodes;
     tc.innerHTML = _renderDownloadedTab(episodes);
+    _renderDLTabList(episodes);
     _fadeInTabContent(tc);
   } catch (_) {}
 }
@@ -526,7 +553,7 @@ async function _refreshAvailableTab() {
     // Silently update tab content if user is on the Available tab
     if (!window._dlActiveTab || window._dlActiveTab === "available") {
       const tc = document.getElementById("dl-tab-content");
-      if (tc) tc.innerHTML = renderAvailableFeeds(available);
+      if (tc) { tc.innerHTML = renderAvailableFeeds(available); _renderAvailableList(available); }
     }
   } catch (_) {}
 }
@@ -542,15 +569,20 @@ window.switchDLTab = function (tabId, btn) {
     // Render from cache immediately so the tab appears without delay, then
     // silently update in the background to pick up any state changes
     tabContent.innerHTML = renderAvailableFeeds(window._dlData.available);
+    _renderAvailableList(window._dlData.available);
     _refreshAvailableTab();
   } else if (tabId === "inprogress") {
     const { inProgress } = window._dlData;
     const s = window._dlData.status;
     tabContent.innerHTML = _renderInProgressTab(inProgress, (s?.active_downloads ?? 0) + (s?.download_queue_size ?? 0));
     _wireInProgressActions();
+    // Each tab renders an empty list host; the rows come from the model, and
+    // re-mounting here binds the window to the newly created element.
+    _renderDLTabList(inProgress);
     _startDLPoll();
   } else if (tabId === "downloaded") {
     tabContent.innerHTML = _renderDownloadedTab(window._dlData.downloaded);
+    _renderDLTabList(window._dlData.downloaded || []);
     _startDownloadedPoll();
   } else if (tabId === "failed") {
     // Re-fetch failed list on switch so dismissals/retries elsewhere are reflected
@@ -560,9 +592,11 @@ window.switchDLTab = function (tabId, btn) {
       _setTabBadge("badge-failed", failed.length, "badge-error");
       tabContent.innerHTML = _renderFailedTab(failed);
       _wireFailedActions();
+      _renderDLTabList(failed);
     }).catch(() => {
       tabContent.innerHTML = _renderFailedTab(window._dlData.failed || []);
       _wireFailedActions();
+      _renderDLTabList(window._dlData.failed || []);
     });
     _startFailedPoll();
   }
@@ -742,23 +776,27 @@ async function _doPollTick() {
     // Track which IDs are still in-progress
     const activeIds = new Set(inProgress.map((e) => e.id));
 
-    // Remove rows for episodes that finished (no longer in in-progress).
-    // For rows that were actively downloading, complete the progress bar to 100%
-    // first so the user sees it fill before the row disappears.
+    // Rows for episodes that just finished are held in place while their bar
+    // fills to 100% and they collapse away — without the pin the window would
+    // discard them the moment setItems() runs below and the animation would
+    // never be seen. animateRemove writes an inline height while collapsing,
+    // which is also why pinned rows are excluded from measurement.
     for (const row of [...list.querySelectorAll(".episode-item")]) {
       const id = Number(row.id.replace("dl-ep-", ""));
-      if (!activeIds.has(id)) {
-        if (row.dataset.status === "downloading") {
-          const fill = row.querySelector(".progress-fill");
-          if (fill) {
-            fill.style.transition = "width 0.3s ease-out";
-            fill.style.width = "100%";
-          }
-          row.style.pointerEvents = "none";
-          setTimeout(() => animateRemove(row), 330);
-        } else {
-          animateRemove(row);
-        }
+      if (activeIds.has(id) || _dlLeaving.has(id)) continue;
+      _dlLeaving.add(id);
+      _dlVList?.pin(id);
+      const done = () => {
+        animateRemove(row);
+        setTimeout(() => { _dlLeaving.delete(id); _dlVList?.unpin(id); }, 360);
+      };
+      if (row.dataset.status === "downloading") {
+        const fill = row.querySelector(".progress-fill");
+        if (fill) { fill.style.transition = "width 0.3s ease-out"; fill.style.width = "100%"; }
+        row.style.pointerEvents = "none";
+        setTimeout(done, 330);
+      } else {
+        done();
       }
     }
 
@@ -793,52 +831,23 @@ async function _doPollTick() {
       }
     }
 
+    // A queued row must be rebuilt when it starts downloading: the queued CSS
+    // sets width:100% !important with a pulse, so merely changing data-status
+    // and setting a small width plays a 2-second reverse animation. A fresh
+    // element has no animation history and starts at the right position.
     for (const ep of inProgress) {
-      const row = document.getElementById(`dl-ep-${ep.id}`);
-      if (row) {
-        const prevStatus = row.dataset.status;
-        if (prevStatus !== ep.status) {
-          // Status changed — re-render from scratch to avoid animation artifacts.
-          row.outerHTML = renderDLRow(ep);
-        } else if (ep.status === "downloading") {
-          // Status unchanged and actively downloading — update just the fill width.
-          // Prefer the in-memory value (updated every chunk) over the DB value
-          // (committed every 5%) so all concurrent downloads animate correctly.
-          const fill = row.querySelector(".progress-fill");
-          if (fill) {
-            const pct = activeProgress[String(ep.id)] ?? ep.download_progress;
-            fill.style.width = `${pct}%`;
-          }
-        }
-        // "queued → queued": CSS animation owns the fill; badge text doesn't change. No-op.
-      } else {
-        // Override DB progress with in-memory value so a newly-appearing row
-        // starts at the real current position rather than the last 5% commit.
-        const liveEp = activeProgress[String(ep.id)] != null
-          ? { ...ep, download_progress: activeProgress[String(ep.id)] }
-          : ep;
-        list.insertAdjacentHTML("beforeend", renderDLRow(liveEp));
-        const newRow = document.getElementById(`dl-ep-${ep.id}`);
-        if (newRow) newRow.classList.add("entering");
-      }
+      const row = _dlVList?.node(ep.id);
+      if (row && row.dataset.status !== ep.status) _dlVList.invalidate(ep.id);
     }
 
-    // Re-sort DOM rows only when the order has actually changed.
-    // Exclude rows that are completing/animating away (not in activeIds) so that
-    // a finishing row doesn't get stranded at the top while the others are
-    // appended below it.
-    const currentOrder = [...list.querySelectorAll(".episode-item")]
-      .filter((r) => activeIds.has(Number(r.id.replace("dl-ep-", ""))))
-      .map((r) => Number(r.id.replace("dl-ep-", "")));
-    const desiredOrder = inProgress.map((e) => e.id);
-    const orderChanged = currentOrder.length !== desiredOrder.length ||
-      desiredOrder.some((id, i) => id !== currentOrder[i]);
-    if (orderChanged) {
-      for (const ep of inProgress) {
-        const row = document.getElementById(`dl-ep-${ep.id}`);
-        if (row) list.appendChild(row);
-      }
-    }
+    // The model already holds the desired order, so the window simply renders
+    // it. This replaces a re-sort that read the current order back out of the
+    // DOM and re-appended nodes — which cannot work once the DOM holds only a
+    // screenful of the list.
+    _renderDLTabList(inProgress);
+    // Painted after the window settles, so rows that have just been built get
+    // their real position rather than the last committed 5%.
+    _paintDLProgress(inProgress, activeProgress);
 
     // Update "N in progress" label
     const countLabel = document.getElementById("dl-inprogress-count");
@@ -905,14 +914,48 @@ function renderDLRow(ep) {
   </div>`;
 }
 
-function renderDLList(episodes) {
-  if (episodes.length === 0) {
-    return `<div class="empty-state">
+const _DL_EMPTY = `<div class="empty-state">
       <div class="empty-state-icon">🎙️</div>
       <div class="empty-state-title">Nothing here yet</div>
     </div>`;
-  }
+
+function renderDLList(episodes) {
+  if (episodes.length === 0) return _DL_EMPTY;
   return episodes.map(renderDLRow).join("");
+}
+
+// ── Windowed downloads list ─────────────────────────────────────────────────
+// The three episode tabs share one container id, so one handle serves all of
+// them; switching tabs re-mounts against the fresh element.
+let _dlVList = null;
+
+function _renderDLTabList(episodes) {
+  const host = document.getElementById("dl-episode-list");
+  if (!host) return;
+  if (!_dlVList || _dlVList.destroyed || _dlVList.host !== host) {
+    _dlVList = VList.mount(host, {
+      items: episodes,
+      key: (ep) => ep.id,
+      render: renderDLRow,
+      emptyHTML: _DL_EMPTY,
+      estimateHeight: 88,
+    });
+  } else {
+    _dlVList.setItems(episodes);
+  }
+}
+
+// Progress deliberately does NOT go through a re-render. Replacing a queued row
+// restarts the pulse animation, and replacing a downloading row makes the fill
+// jump; both are visible on every 2s tick. So the window owns which rows exist,
+// and this owns what the bars inside them read.
+function _paintDLProgress(episodes, activeProgress) {
+  for (const ep of episodes) {
+    if (ep.status !== "downloading") continue;
+    const row = _dlVList?.node(ep.id);
+    const fill = row?.querySelector(".progress-fill");
+    if (fill) fill.style.width = `${activeProgress[String(ep.id)] ?? ep.download_progress}%`;
+  }
 }
 
 window.downloadFeedFromDL = async function (feedId, mode, btn) {

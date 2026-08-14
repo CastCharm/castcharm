@@ -121,12 +121,18 @@ async function viewPlaylistDetail(playlistId) {
     return;
   }
 
-  // Set up _epState so updateEpisodeRow and playlist membership tracking work
+  // Set up _epState so updateEpisodeRow and playlist membership tracking work.
+  // Deliberately a different shape from the feed-detail one (no feed, no
+  // offset/batch) — both views mount an element with id="episode-list" and share
+  // episodeRow(), so the model helpers in feed-detail.js tolerate either. Keep
+  // them in step if you change one.
   window._epState = {
     feed: null,
     playlistId: id,
     playlistMembers: new Set(episodes.map((ep) => ep.id)),
+    rowOpts: { draggable: pl.type === "custom", hideSeqNumber: true },
   };
+  _epSetAll(episodes);
 
   const typeLabel = pl.type === "feed"
     ? `Feed playlist · ${pl.filter === "unplayed" ? "Unplayed only" : "All episodes"}`
@@ -159,12 +165,11 @@ async function viewPlaylistDetail(playlistId) {
           </div>
         </div>
       </div>
-      <div class="episode-list" id="episode-list">
-        ${episodes.length
-          ? episodes.map((ep) => episodeRow(ep, null, { draggable: pl.type === "custom", hideSeqNumber: true })).join("")
-          : `<p style="color:var(--text-3);font-size:13px;margin-top:8px">No episodes yet.</p>`}
-      </div>
+      <div class="episode-list" id="episode-list"></div>
     </div>`;
+
+  // Rows come from the model; only those near the viewport are ever built.
+  _epRender();
 
   // All shown episodes are in this playlist — initialize their "+" buttons as primary
   _applyPlaylistMemberStates(window._epState.playlistMembers);
@@ -177,49 +182,103 @@ async function viewPlaylistDetail(playlistId) {
   // Drag-to-reorder (custom playlists only)
   if (pl.type === "custom") {
     const list = document.getElementById("episode-list");
-    let dragSrc = null;
+    // A key, not a node. The dragged row can be discarded and rebuilt while the
+    // user scrolls toward the drop point, so holding the element would leave us
+    // pointing at something detached from the page.
+    let dragKey = null;
+    const _epIdOf = (row) => (row ? Number(row.id.replace("ep-", "")) : null);
+    const _clearMarkers = () => list.querySelectorAll(".drag-over-top, .drag-over-bottom")
+      .forEach((r) => r.classList.remove("drag-over-top", "drag-over-bottom"));
 
     list.addEventListener("dragstart", (e) => {
-      dragSrc = e.target.closest(".episode-item");
-      if (!dragSrc) return;
+      const row = e.target.closest(".episode-item");
+      if (!row) return;
+      dragKey = _epIdOf(row);
       e.dataTransfer.effectAllowed = "move";
-      dragSrc.classList.add("dragging");
+      row.classList.add("dragging");
+      window._epState?.vlist?.pin(dragKey);
     });
 
     list.addEventListener("dragend", () => {
-      dragSrc?.classList.remove("dragging");
-      list.querySelectorAll(".drag-over-top, .drag-over-bottom").forEach((r) => {
-        r.classList.remove("drag-over-top", "drag-over-bottom");
-      });
-      dragSrc = null;
+      if (dragKey != null) {
+        window._epState?.vlist?.unpin(dragKey);
+        window._epState?.vlist?.node(dragKey)?.classList.remove("dragging");
+      }
+      _clearMarkers();
+      _stopEdgeScroll();
+      dragKey = null;
     });
+
+    // Without this, dragging to a position outside the current window is
+    // impossible — the list no longer scrolls itself when the pointer reaches
+    // the edge, because the rows beyond it do not exist to drag onto.
+    let _edgeTimer = null;
+    function _stopEdgeScroll() {
+      if (_edgeTimer) { cancelAnimationFrame(_edgeTimer); _edgeTimer = null; }
+    }
+    function _edgeScroll(clientY) {
+      const scroller = document.getElementById("content");
+      if (!scroller) return;
+      const { top, bottom } = scroller.getBoundingClientRect();
+      const zone = 60;
+      let dy = 0;
+      if (clientY < top + zone) dy = -Math.ceil((top + zone - clientY) / 4);
+      else if (clientY > bottom - zone) dy = Math.ceil((clientY - (bottom - zone)) / 4);
+      _stopEdgeScroll();
+      if (!dy) return;
+      const step = () => { scroller.scrollTop += dy; _edgeTimer = requestAnimationFrame(step); };
+      _edgeTimer = requestAnimationFrame(step);
+    }
 
     list.addEventListener("dragover", (e) => {
       e.preventDefault();
       e.dataTransfer.dropEffect = "move";
       const target = e.target.closest(".episode-item");
-      list.querySelectorAll(".drag-over-top, .drag-over-bottom").forEach((r) => {
-        r.classList.remove("drag-over-top", "drag-over-bottom");
-      });
-      if (target && target !== dragSrc) {
+      _clearMarkers();
+      if (target && _epIdOf(target) !== dragKey) {
         const { top, height } = target.getBoundingClientRect();
         target.classList.add(e.clientY < top + height / 2 ? "drag-over-top" : "drag-over-bottom");
       }
+      _edgeScroll(e.clientY);
     });
 
     list.addEventListener("drop", async (e) => {
       e.preventDefault();
+      _stopEdgeScroll();
       const target = e.target.closest(".episode-item");
-      if (!target || !dragSrc || target === dragSrc) return;
+      const targetKey = _epIdOf(target);
+      if (targetKey == null || dragKey == null || targetKey === dragKey) return;
+
+      // Reorder the model by index rather than reading the resulting DOM. The
+      // rendered rows are only a window onto the list, so deriving the order
+      // from them would post a partial array — and the server assigns positions
+      // only for the ids it receives, leaving everything off-screen at its old
+      // position and colliding with the new ones. That scrambles the ordering
+      // the user just arranged.
+      const eps = window._epState.eps;
+      const from = eps.findIndex((ep) => ep.id === dragKey);
+      let to = eps.findIndex((ep) => ep.id === targetKey);
+      if (from === -1 || to === -1) return;
       const { top, height } = target.getBoundingClientRect();
-      if (e.clientY < top + height / 2) {
-        list.insertBefore(dragSrc, target);
-      } else {
-        list.insertBefore(dragSrc, target.nextSibling);
+      if (e.clientY >= top + height / 2) to += 1;
+
+      const next = eps.slice();
+      const [moved] = next.splice(from, 1);
+      next.splice(to > from ? to - 1 : to, 0, moved);
+
+      // Belt and braces: a short array here can only be a bug, and sending one
+      // corrupts data on the server. Fail loudly instead.
+      if (next.length !== eps.length) {
+        Toast.error("Order not saved — please reload");
+        return;
       }
-      const newOrder = [...list.querySelectorAll(".episode-item")].map((r) => Number(r.id.replace("ep-", "")));
+
+      _epSetAll(next);
+      window._epState.rowOpts = { draggable: true, hideSeqNumber: true };
+      _epRender();
+
       try {
-        await API.reorderPlaylist(pl.id, newOrder);
+        await API.reorderPlaylist(pl.id, next.map((ep) => ep.id));
       } catch (_) {
         Toast.error("Could not save order");
       }

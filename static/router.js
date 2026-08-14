@@ -33,6 +33,10 @@ const Router = {
         if (window._syncPollTimer) { clearInterval(window._syncPollTimer); window._syncPollTimer = null; }
         if (window._logsInterval)  { clearInterval(window._logsInterval);  window._logsInterval  = null; }
         if (typeof _stopDLPoll === "function") _stopDLPoll();
+        // Windowed lists listen on #content, which survives navigation — only
+        // its innerHTML is replaced below. Without this their listeners outlive
+        // the view and keep firing against a host that is no longer in the page.
+        if (typeof VList !== "undefined") VList.destroyAll();
         window._onSyncIdle     = null;
         window._onDownloadIdle = null;
         window._onStatusPoll   = null;

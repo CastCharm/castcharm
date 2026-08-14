@@ -173,28 +173,47 @@ document.addEventListener("keydown", (e) => {
 // Real-time download progress + status polling
 // ============================================================
 const _monitoredIds = new Set(); // episode IDs we know are active
+// Episodes whose completion animation is in flight. This used to be a
+// `_completing` expando on the row element, which was fine while rows were
+// permanent; now a row can be discarded and rebuilt mid-animation, and the flag
+// has to outlive the node it describes.
+const _completingIds = new Set();
 
 // _patchEpRow updates a single episode row in the per-feed view without re-rendering
 // the whole list.  It handles three distinct cases in priority order.
 function _patchEpRow(ep, activeProgress = {}) {
+  // The previous status comes from the model, not from the row's data-status.
+  // The DOM is a window onto the list now, so an episode that is scrolled away
+  // has no row to remember what it used to be — and reading `undefined` there
+  // would replay the queued -> downloading transition on every poll.
+  const prev = typeof _epGet === "function" ? _epGet(ep.id) : null;
+  const prevStatus = prev ? prev.status : undefined;
+
+  // Record the new state first, so it is not lost when the row is off-screen.
+  if (typeof _epUpsert === "function" && prev) _epUpsert(ep);
+
   const row = document.getElementById(`ep-${ep.id}`);
   if (!row) return;
-
-  const prevStatus = row.dataset.status;
 
   // Case 1 — Terminal state (downloaded / failed): we want to animate the progress
   // bar to 100% before replacing the row so the user sees the fill complete rather
   // than blinking out.  The _completing flag prevents a double-trigger while the
   // 330ms animation is in flight.
   if (ep.status === "downloaded" || ep.status === "failed") {
-    if (row._completing) return;
+    if (_completingIds.has(ep.id)) return;
     if (prevStatus === "downloading") {
-      row._completing = true;
+      _completingIds.add(ep.id);
+      const vlist = window._epState?.vlist;
+      // Held in place for the length of the animation: the callback below
+      // targets this specific row, and letting the window discard it midway
+      // would strand both the animation and the flag.
+      vlist?.pin(ep.id);
       const fill = row.querySelector(".progress-fill");
       if (fill) { fill.style.transition = "width 0.3s ease-out"; fill.style.width = "100%"; }
       row.style.pointerEvents = "none";
       setTimeout(() => {
-        row._completing = false;
+        _completingIds.delete(ep.id);
+        vlist?.unpin(ep.id);
         if (typeof window.updateEpisodeRow === "function") window.updateEpisodeRow(ep);
       }, 330);
     } else {
