@@ -72,15 +72,16 @@ window._autoPlayNext = async function (currentEpId) {
       return;
     }
   } catch (_) {
-    // No server context set — fall back to DOM-based next within current feed view
-    const rows = [...document.querySelectorAll("#episode-list .episode-item")];
-    const currentIdx = rows.findIndex((r) => r.id === `ep-${currentEpId}`);
+    // No server context set — fall back to the next episode in the current
+    // view. Walks the model rather than the DOM: the rendered rows are only a
+    // window onto the list, so searching them would give up at the bottom of
+    // the screen instead of the bottom of the feed.
+    const eps = window._epState?.visibleEps || [];
+    const currentIdx = eps.findIndex((ep) => ep.id === currentEpId);
     if (currentIdx === -1) return;
-    for (let i = currentIdx + 1; i < rows.length; i++) {
-      const r = rows[i];
-      if (r.dataset.status === "downloaded" && !r.dataset.played) {
-        const nextId = Number(r.id.replace("ep-", ""));
-        if (nextId) window.playEpisode(nextId);
+    for (let i = currentIdx + 1; i < eps.length; i++) {
+      if (eps[i].status === "downloaded" && !eps[i].played) {
+        window.playEpisode(eps[i].id);
         return;
       }
     }
@@ -96,17 +97,136 @@ function _applyPlaylistMemberStates(memberSet) {
 }
 
 // ============================================================
+// Episode model
+// ============================================================
+// The list used to keep its state in the DOM: every episode's status, played
+// flag and title lived in row data-* attributes, and the rest of the app read
+// them back with getElementById. That stops being true the moment a row can be
+// absent from the page, so the state lives here and rows are a projection of
+// it. Anything that used to ask the DOM a question now asks these.
+//
+// Episode objects are mutated in place rather than replaced, so the array slot,
+// the Map entry and any reference held by a caller all stay in agreement.
+
+function _epSetAll(eps) {
+  const st = window._epState;
+  if (!st) return;
+  st.eps = eps;
+  st.byId = new Map(eps.map((e) => [e.id, e]));
+  st.visibleEps = eps;
+  st.selection = st.selection || new Set();
+  st.notesOpen = st.notesOpen || new Set();
+}
+
+function _epAppend(eps) {
+  const st = window._epState;
+  if (!st?.eps) return;
+  for (const ep of eps) {
+    if (st.byId.has(ep.id)) Object.assign(st.byId.get(ep.id), ep);
+    else { st.eps.push(ep); st.byId.set(ep.id, ep); }
+  }
+}
+
+function _epGet(id) { return window._epState?.byId?.get(Number(id)) || null; }
+
+function _epUpsert(ep) {
+  const st = window._epState;
+  if (!st?.byId) return null;
+  const prev = st.byId.get(ep.id);
+  if (prev) { Object.assign(prev, ep); return prev; }
+  st.eps.push(ep);
+  st.byId.set(ep.id, ep);
+  return ep;
+}
+
+// Does this episode survive the active filter? Extracted so the predicate has
+// exactly one definition — it decides both what renders and what "select all"
+// means, and those two drifting apart is the bug this whole change exists to
+// prevent.
+function _epMatches(ep, q, sf) {
+  if (q && !(ep.title || "").toLowerCase().includes(q)) return false;
+  const hidden = !!ep.hidden;
+  if (sf === "hidden")     return hidden;
+  if (sf === "downloaded") return !hidden && ep.status === "downloaded";
+  if (sf === "unplayed")   return !hidden && !ep.played;
+  if (sf === "active")     return !hidden && (ep.status === "queued" || ep.status === "downloading");
+  if (sf === "failed")     return !hidden && ep.status === "failed";
+  return true;   // "all" shows everything, hidden included but greyed out
+}
+
+// The single seam between the model and the page. Swap this for a plain
+// innerHTML join to take virtualization out of the picture while diagnosing
+// something else.
+// An empty list has three quite different causes, and saying "nothing matches
+// the current filter" to someone looking at a playlist they have not put
+// anything in yet is just wrong. Recomputed on every render because the reason
+// changes as the user types.
+function _epEmptyHTML() {
+  const st = window._epState || {};
+  const nothingLoaded = !(st.eps || []).length;
+
+  if (nothingLoaded && st.playlistId) {
+    return `<div class="empty-state">
+      <div class="empty-state-title">No episodes yet</div>
+      <div class="empty-state-desc">No episodes have been added to this playlist.</div></div>`;
+  }
+  if (nothingLoaded) {
+    return `<div class="empty-state">
+      <div class="empty-state-title">No episodes found</div>
+      <div class="empty-state-desc">Sync the feed to fetch episodes.</div></div>`;
+  }
+  return `<div class="empty-state">
+    <div class="empty-state-title">No episodes found</div>
+    <div class="empty-state-desc">Nothing matches the current filter.</div></div>`;
+}
+
+function _epRender() {
+  const st = window._epState;
+  const host = document.getElementById("episode-list");
+  if (!st || !host) return;
+  const feed = st.feed || null;
+  const opts = st.rowOpts || {};
+
+  if (!st.vlist || st.vlist.destroyed || st.vlist.host !== host) {
+    st.vlist = VList.mount(host, {
+      items: st.visibleEps || [],
+      key: (ep) => ep.id,
+      render: (ep) => episodeRow(ep, feed, opts),
+      emptyHTML: _epEmptyHTML(),
+      onMount: _afterEpRender,
+    });
+  } else {
+    // Refreshed before the render, so the message matches the current reason
+    // rather than whichever one happened to apply when the list was mounted.
+    st.vlist.emptyHTML = _epEmptyHTML();
+    st.vlist.setItems(st.visibleEps || []);
+  }
+}
+
+// Everything that decorates rows after they appear. Previously these ran once
+// per full list rebuild; now they run for each batch that scrolls in, so they
+// must stay idempotent.
+function _afterEpRender() {
+  Player.syncPlayBtns();
+  const members = window._epState?.playlistMembers;
+  if (members) _applyPlaylistMemberStates(members);
+}
+
+// ============================================================
 // Feed detail view
 // ============================================================
 // Refresh just the episode list without touching the rest of the page
 async function _refreshEpisodeList() {
-  const { id, feed, batch, order } = window._epState || {};
+  const { id, batch, order } = window._epState || {};
   if (!id) return;
   const eps = await API.getFeedEpisodesWithHidden(id, batch, 0, order || "desc");
   window._epState.offset = eps.length;
-  const list = document.getElementById("episode-list");
-  if (list) list.innerHTML = eps.map((ep) => episodeRow(ep, feed)).join("");
-  Player.syncPlayBtns();
+  _epSetAll(eps);
+  // Re-apply the filter rather than dropping it. Every one of this function's
+  // callers used to reset the list to "everything" while leaving the filter box
+  // text and the active pill on screen, so the page contradicted itself after
+  // any bulk action, import or download.
+  window._filterEpisodes();
 }
 
 // Refresh just the feed header stats + last-checked text
@@ -481,7 +601,12 @@ async function viewFeedDetail(feedId) {
   // go and re-save an unrelated setting.
   const EP_BATCH = Math.min(settings.episode_page_size || 10000, 10000);
   const episodes = await API.getFeedEpisodesWithHidden(id, EP_BATCH, 0);
+  // Shape note: playlist detail builds a deliberately different _epState
+  // (feed: null, plus playlistId) in playlists.js. Both mount an element with
+  // id="episode-list", and the model helpers above are written to tolerate
+  // either — keep them in step if you change one.
   window._epState = { id, feed, offset: episodes.length, batch: EP_BATCH, statusFilter: "all" };
+  _epSetAll(episodes);
 
   // Store ID3 tag definitions globally so the tags modal can use them
   window._id3TagDefs = id3Tags;
@@ -889,13 +1014,7 @@ async function viewFeedDetail(feedId) {
               <button class="ep-filter-pill" data-sf="hidden">Hidden</button>
             </div>
           </div>
-          <div class="episode-list" id="episode-list">
-            ${episodes.length === 0
-              ? `<div class="empty-state"><div class="empty-state-icon">${svg('<path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>', 'style="width:40px;height:40px;display:block;margin:0 auto"')}</div>
-                 <div class="empty-state-title">No episodes found</div>
-                 <div class="empty-state-desc">Sync the feed to fetch episodes.</div></div>`
-              : episodes.map((ep) => episodeRow(ep, feed)).join("")}
-          </div>
+          <div class="episode-list" id="episode-list"></div>
           ${episodes.length >= EP_BATCH
             ? `<div style="padding:12px;text-align:center">
                  <button class="btn btn-ghost btn-sm" id="btn-load-more-eps">
@@ -910,6 +1029,10 @@ async function viewFeedDetail(feedId) {
         </div>
       </div>
     </div>`;
+
+  // The list markup above is an empty shell — rows come from the model, and
+  // only the ones near the viewport are ever built.
+  _epRender();
 
   // Wire up buttons
   window._onSyncIdle = _refreshFeedStats;
@@ -957,32 +1080,20 @@ async function viewFeedDetail(feedId) {
 
   // Episode filter — combines text search and status pill
   window._filterEpisodes = function () {
+    const st = window._epState;
+    if (!st?.eps) return;
     const q  = (document.getElementById("ep-filter")?.value || "").toLowerCase();
-    const sf = window._epState?.statusFilter || "all";
-    const rows = [...document.querySelectorAll("#episode-list .episode-item")];
-    let visible = 0;
-    rows.forEach((row) => {
-      const title  = (row.dataset.title  || "").toLowerCase();
-      const status =  row.dataset.status || "";
-      const played =  row.dataset.played === "1";
-      const textOk = !q || title.includes(q);
-      let   sfOk   = true;
-      const isHidden = row.dataset.hidden === "1";
-      if      (sf === "hidden")     sfOk = isHidden;
-      else if (sf === "downloaded") sfOk = !isHidden && status === "downloaded";
-      else if (sf === "unplayed")   sfOk = !isHidden && !played;
-      else if (sf === "active")     sfOk = !isHidden && (status === "queued" || status === "downloading");
-      else if (sf === "failed")     sfOk = !isHidden && status === "failed";
-      // "all" shows everything including hidden (they remain grayed out)
-      const show = textOk && sfOk;
-      row.style.display = show ? "" : "none";
-      if (show) visible++;
-    });
-    const total = rows.length;
+    const sf = st.statusFilter || "all";
+    st.visibleEps = q || sf !== "all"
+      ? st.eps.filter((ep) => _epMatches(ep, q, sf))
+      : st.eps;
+    _epRender();
+
+    const visible = st.visibleEps.length;
+    const total   = st.eps.length;
     const bar = document.getElementById("ep-total-bar");
     if (bar) {
-      const isFiltered = visible < total;
-      bar.textContent = isFiltered
+      bar.textContent = visible < total
         ? `${visible} episode${visible !== 1 ? "s" : ""} shown · ${total} total`
         : `${total} episode${total !== 1 ? "s" : ""} total`;
     }
@@ -1010,9 +1121,12 @@ async function viewFeedDetail(feedId) {
     try {
       const eps = await API.getFeedEpisodesWithHidden(id, EP_BATCH, 0, newOrder);
       window._epState.offset = eps.length;
-      const list = document.getElementById("episode-list");
-      if (list) list.innerHTML = eps.map((ep) => episodeRow(ep, feed)).join("");
-      Player.syncPlayBtns();
+      _epSetAll(eps);
+      // Sorting reorders the list under any open notes panel, which would leave
+      // an episode expanded in a place the user did not put it.
+      window._epState.notesOpen?.clear();
+      window._filterEpisodes();
+      document.getElementById("content")?.scrollTo({ top: 0 });
     } catch (e) { Toast.error(e.message); }
     btn.disabled = false;
   });
@@ -1375,16 +1489,20 @@ async function viewFeedDetail(feedId) {
   document.getElementById("btn-load-more-eps")?.addEventListener("click", loadMoreEpisodes);
 
   // Bulk select mode
-  let _bulkIds = new Set();
+  // Selection lives on the model, not in a closure, because episodeRow() has to
+  // render the checkbox state itself — a row that scrolls out and back must
+  // come back ticked, and only the model knows.
+  const _bulk = () => (window._epState.selection ||= new Set());
+
   function _allEpIds() {
-    // Only include episodes currently visible (not hidden by the active filter)
-    return [...document.querySelectorAll(".ep-checkbox")]
-      .filter((el) => el.closest(".episode-item")?.style.display !== "none")
-      .map((el) => Number(el.dataset.epId));
+    // "Everything the filter currently admits" — which is the whole filtered
+    // set, not merely the rows that happen to be on screen. Reading the DOM
+    // here meant Select All selected a screenful.
+    return (window._epState?.visibleEps || []).map((ep) => ep.id);
   }
 
   function _updateBulkButtons() {
-    const ids = [..._bulkIds];
+    const ids = [..._bulk()];
     const hasSelection = ids.length > 0;
 
     // Show/hide "Apply to N selected" button
@@ -1398,58 +1516,62 @@ async function viewFeedDetail(feedId) {
     if (!hasSelection) return;
 
     // Played smart label: "Mark Unplayed" only if ALL selected are already played
-    const allPlayed = ids.every((id) => document.getElementById(`ep-${id}`)?.dataset.played === "1");
+    const allPlayed = ids.every((id) => !!_epGet(id)?.played);
     const playedLabel = document.getElementById("bulk-btn-played-label");
     if (playedLabel) playedLabel.textContent = allPlayed ? "Mark Unplayed" : "Mark Played";
 
     // Hidden smart label: "Unhide" only if ALL selected are already hidden
-    const allHidden = ids.every((id) => document.getElementById(`ep-${id}`)?.dataset.hidden === "1");
+    const allHidden = ids.every((id) => !!_epGet(id)?.hidden);
     const hiddenLabel = document.getElementById("bulk-btn-hidden-label");
     if (hiddenLabel) hiddenLabel.textContent = allHidden ? "Unhide" : "Hide";
   }
 
+  // Only touches the checkboxes that exist; the rest render themselves ticked
+  // from the model when they scroll in.
   function _syncCheckboxes() {
+    const sel = _bulk();
     for (const cb of document.querySelectorAll(".ep-checkbox")) {
-      cb.checked = _bulkIds.has(Number(cb.dataset.epId));
+      cb.checked = sel.has(Number(cb.dataset.epId));
     }
     _updateBulkButtons();
   }
 
   window._bulkToggle = (epId) => {
-    if (_bulkIds.has(epId)) _bulkIds.delete(epId);
-    else _bulkIds.add(epId);
+    const sel = _bulk();
+    if (sel.has(epId)) sel.delete(epId);
+    else sel.add(epId);
     const cb = document.querySelector(`.ep-checkbox[data-ep-id="${epId}"]`);
-    if (cb) cb.checked = _bulkIds.has(epId);
+    if (cb) cb.checked = sel.has(epId);
     _updateBulkButtons();
   };
 
   window._bulkActPlayed = () => {
-    const allPlayed = [..._bulkIds].every((id) => document.getElementById(`ep-${id}`)?.dataset.played === "1");
+    const allPlayed = [..._bulk()].every((id) => !!_epGet(id)?.played);
     window._bulkAct(allPlayed ? "mark_unplayed" : "mark_played");
   };
 
   window._bulkActHidden = () => {
-    const allHidden = [..._bulkIds].every((id) => document.getElementById(`ep-${id}`)?.dataset.hidden === "1");
+    const allHidden = [..._bulk()].every((id) => !!_epGet(id)?.hidden);
     window._bulkAct(allHidden ? "unhide" : "hide");
   };
 
   window._bulkSelectAll = () => {
-    _bulkIds = new Set(_allEpIds());
+    window._epState.selection = new Set(_allEpIds());
     _syncCheckboxes();
   };
 
   window._bulkSelectNone = () => {
-    _bulkIds = new Set();
+    window._epState.selection = new Set();
     _syncCheckboxes();
   };
 
   window._bulkSelectInverse = () => {
-    const all = _allEpIds();
-    _bulkIds = new Set(all.filter((id) => !_bulkIds.has(id)));
+    const sel = _bulk();
+    window._epState.selection = new Set(_allEpIds().filter((id) => !sel.has(id)));
     _syncCheckboxes();
   };
   window._bulkCancel = () => {
-    _bulkIds = new Set();
+    window._epState.selection = new Set();
     _syncCheckboxes();
     document.getElementById("bulk-select-all")?.classList.add("hidden");
     document.getElementById("bulk-select-none")?.classList.add("hidden");
@@ -1461,14 +1583,14 @@ async function viewFeedDetail(feedId) {
     if (btn) { btn.textContent = "Select Episodes"; btn.classList.remove("btn-cancel-select"); }
   };
   window._bulkAct = async (action) => {
-    const ids = [..._bulkIds];
+    const ids = [..._bulk()];
     if (!ids.length) return Toast.info("No episodes selected");
     // For delete_file we only want to operate on episodes that actually have a
     // downloaded file — passing the full selection would inflate the affected count
     // and ask the backend to process IDs it has nothing to do for.
     let actIds = ids;
     if (action === "delete_file") {
-      actIds = ids.filter((id) => document.getElementById(`ep-${id}`)?.dataset.status === "downloaded");
+      actIds = ids.filter((id) => _epGet(id)?.status === "downloaded");
       if (!actIds.length) return Toast.info("None of the selected episodes have a downloaded file");
       if (!confirm(`Delete files for ${actIds.length} episode${actIds.length !== 1 ? "s" : ""}?`)) return;
     }
@@ -1608,12 +1730,31 @@ async function viewFeedDetail(feedId) {
     const targetId = window._pendingEpScroll;
     window._pendingEpScroll = null;
     requestAnimationFrame(() => {
-      const row = document.getElementById(`ep-${targetId}`);
-      if (row) {
-        row.scrollIntoView({ behavior: "smooth", block: "center" });
+      // Used to be a getElementById + scrollIntoView, which quietly did nothing
+      // whenever the target was not among the rendered rows — i.e. for most of
+      // any large feed. The model knows where the episode is whether or not it
+      // is on screen, so the jump now works at any depth.
+      const st = window._epState;
+      if (st?.vlist) {
+        // If the active filter excludes it, no amount of scrolling will reveal
+        // it — clear the filter first rather than land on nothing.
+        if (!st.visibleEps?.some((ep) => ep.id === targetId) && st.byId?.has(targetId)) {
+          st.statusFilter = "all";
+          const box = document.getElementById("ep-filter");
+          if (box) box.value = "";
+          document.querySelectorAll("#ep-status-pills .ep-filter-pill")
+            .forEach((b) => b.classList.toggle("active", b.dataset.sf === "all"));
+          window._filterEpisodes();
+        }
+        st.vlist.scrollToKey(targetId, { block: "center" });
+      }
+      requestAnimationFrame(() => {
+        const row = document.getElementById(`ep-${targetId}`);
+        if (!row) return;
+        if (!st?.vlist) row.scrollIntoView({ behavior: "smooth", block: "center" });
         row.classList.add("ep-highlight");
         setTimeout(() => row.classList.remove("ep-highlight"), 5100);
-      }
+      });
     });
   }
 }
@@ -1625,15 +1766,12 @@ async function loadMoreEpisodes() {
   if (btn) btn.textContent = "Loading…";
   try {
     const more = await API.getFeedEpisodesWithHidden(id, batch, offset, order || "desc");
-    const list = document.getElementById("episode-list");
-    if (list) {
-      list.insertAdjacentHTML("beforeend", more.map((ep) => episodeRow(ep, feed)).join(""));
-      for (const ep of more) {
-        document.getElementById(`ep-${ep.id}`)?.classList.add("entering");
-      }
-    }
+    _epAppend(more);
     window._epState.offset += more.length;
-    if (window._epState.playlistMembers) _applyPlaylistMemberStates(window._epState.playlistMembers);
+    // Goes through the filter rather than straight to the DOM, so a page loaded
+    // while a filter is active is filtered like every other page. Appending
+    // directly also used to skip the checkbox and play-button resync.
+    window._filterEpisodes();
 
     const container = btn?.parentElement;
     if (!container) return;
@@ -1749,12 +1887,26 @@ window._toggleEpNotes = function (id) {
   if (!row) return;
   if (document.getElementById("episode-list")?.classList.contains("bulk-mode")) {
     window._bulkToggle(id);
-  } else {
-    row.toggleAttribute("data-notes-open");
+    return;
   }
+  const open = row.toggleAttribute("data-notes-open");
+  // Mirror it into the model so the row comes back open if it is scrolled away
+  // and returns. The panel animates max-height over 0.28s (style.css:672), so
+  // the list's idea of this row's height is stale until that settles.
+  const openSet = window._epState?.notesOpen;
+  if (openSet) { open ? openSet.add(id) : openSet.delete(id); }
+  const vlist = window._epState?.vlist;
+  if (vlist) setTimeout(() => vlist.invalidate(id), 300);
 };
 
 function episodeRow(ep, feed, { draggable: isDraggable = false, hideSeqNumber = false } = {}) {
+  // A row can now be built at any moment — including when one scrolls back into
+  // view — so it has to carry its own state rather than assume something will
+  // come along and patch it afterwards.
+  const _st = window._epState || {};
+  const _checked = _st.selection?.has(ep.id) ? " checked" : "";
+  const _notesOpen = _st.notesOpen?.has(ep.id) ? " data-notes-open" : "";
+
   const imgSrc = ep.custom_image_url || ep.episode_image_url || feed?.custom_image_url || feed?.image_url || ep.feed_image_url || "";
   const isDownloaded = ep.status === "downloaded";
   const isActive = ep.status === "downloading" || ep.status === "queued";
@@ -1793,7 +1945,7 @@ function episodeRow(ep, feed, { draggable: isDraggable = false, hideSeqNumber = 
 
   if (ep.hidden) {
     return `<div class="episode-item" id="ep-${ep.id}" data-status="${ep.status}" data-hidden="1" style="opacity:0.45">
-      <input type="checkbox" class="bulk-check ep-checkbox" data-ep-id="${ep.id}" data-action="bulk-toggle" />
+      <input type="checkbox" class="bulk-check ep-checkbox" data-ep-id="${ep.id}" data-action="bulk-toggle"${_checked} />
       <div class="episode-art">
         ${imgSrc
           ? `<img src="${imgSrc}" alt="" loading="lazy" /><div class="episode-art-placeholder" style="display:none">${_PODCAST_SVG}</div>`
@@ -1897,9 +2049,9 @@ function episodeRow(ep, feed, { draggable: isDraggable = false, hideSeqNumber = 
 
   const dragHandle = isDraggable ? `<div class="ep-drag-handle" title="Drag to reorder">${svg('<line x1="8" y1="6" x2="16" y2="6"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="8" y1="18" x2="16" y2="18"/>', 'width="18" height="18"')}</div>` : "";
 
-  return `<div class="episode-item${ep.description ? " has-notes" : ""}" id="ep-${ep.id}" data-status="${ep.status}" data-title="${(ep.title || "").toLowerCase().replace(/"/g, "&quot;")}"${ep.played ? ' data-played="1"' : ""}${ep.description ? ` data-action="toggle-ep-notes" data-ep-id="${ep.id}"` : ""}${isDraggable ? ' draggable="true"' : ""}>
+  return `<div class="episode-item${ep.description ? " has-notes" : ""}" id="ep-${ep.id}" data-status="${ep.status}" data-title="${(ep.title || "").toLowerCase().replace(/"/g, "&quot;")}"${ep.played ? ' data-played="1"' : ""}${ep.description ? ` data-action="toggle-ep-notes" data-ep-id="${ep.id}"` : ""}${isDraggable ? ' draggable="true"' : ""}${_notesOpen}>
     ${dragHandle}
-    <input type="checkbox" class="bulk-check ep-checkbox" data-ep-id="${ep.id}" data-action="bulk-toggle" />
+    <input type="checkbox" class="bulk-check ep-checkbox" data-ep-id="${ep.id}" data-action="bulk-toggle"${_checked} />
     ${artArea}
     <div class="episode-info">
       <div class="episode-title">
@@ -3236,19 +3388,34 @@ function showImportFilesModal(feedId, feed) {
 }
 
 function updateEpisodeRow(ep) {
+  // Write the model first, always. This used to return early when the row was
+  // absent from the page, and because nothing else recorded the change, a
+  // played/hidden/artwork update to an episode that happened to be scrolled
+  // away was simply lost until the next full refetch.
+  const wasHidden = !!_epGet(ep.id)?.hidden;
+  _epUpsert(ep);
+
+  const vlist = window._epState?.vlist;
   const row = document.getElementById(`ep-${ep.id}`);
-  if (!row) return;
-  const feedState = window._epState?.feed || {};
-  // When an episode is newly hidden, fade to the dimmed opacity before replacing
-  // the row — avoids the jarring instant-disappearance effect.
-  if (ep.hidden && row.dataset.hidden !== "1") {
+  if (!row) return;   // model is updated; the row will render from it on return
+
+  // Newly hidden: fade to the dimmed opacity before swapping, so it does not
+  // vanish under the cursor. Pinned meanwhile so the window cannot unmount it
+  // mid-animation and strand the callback.
+  if (ep.hidden && !wasHidden) {
+    vlist?.pin(ep.id);
     row.style.transition = "opacity 0.25s ease";
     row.style.opacity = "0.45";
-    setTimeout(() => { row.outerHTML = episodeRow(ep, feedState); Player.syncPlayBtns(); }, 260);
-  } else {
-    row.outerHTML = episodeRow(ep, feedState);
-    Player.syncPlayBtns();
+    setTimeout(() => {
+      vlist?.unpin(ep.id);
+      if (vlist) vlist.invalidate(ep.id);
+      else { row.outerHTML = episodeRow(ep, window._epState?.feed || {}); Player.syncPlayBtns(); }
+    }, 260);
+    return;
   }
+
+  if (vlist) vlist.invalidate(ep.id);
+  else { row.outerHTML = episodeRow(ep, window._epState?.feed || {}); Player.syncPlayBtns(); }
 }
 
 window.unlinkSupplementaryFeed = async function (primaryId, subId) {

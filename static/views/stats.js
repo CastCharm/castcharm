@@ -62,6 +62,7 @@ async function viewStats() {
     </div>`;
 
   _renderOverview(_statsGlobalData, null);
+  _renderStatsRows();   // tbody is an empty shell; rows come from the model
   _wireSortHeaders();
 }
 
@@ -898,16 +899,48 @@ function _feedTable(feeds) {
     </th>`
   ).join("") + `<th></th>`;
 
-  const rows = _sortedFeeds(feeds).map(_feedRow).join("");
+  // table-layout:fixed plus an explicit colgroup, because the windowed body only
+  // ever holds a screenful of rows. Left to size itself from its contents, the
+  // table would re-measure its columns against whichever rows happen to be
+  // mounted and the whole grid would visibly jump on every scroll.
+  const colgroup = `<colgroup>${
+    cols.map((c) => `<col style="width:${c.key === "title" ? "auto" : "12%"}">`).join("")
+  }<col style="width:56px"></colgroup>`;
 
   return `<div style="overflow-x:auto">
-    <table class="stats-table">
+    <table class="stats-table" style="table-layout:fixed;width:100%">
+      ${colgroup}
       <thead><tr>${header}</tr></thead>
-      <tbody>${rows}</tbody>
+      <tbody id="stats-feed-body"></tbody>
     </table>
   </div>`;
 }
 
+let _statsVList = null;
+
+// The single seam between the stats model and the table body.
+function _renderStatsRows() {
+  const tbody = document.getElementById("stats-feed-body");
+  if (!tbody || !_statsGlobalData) return;
+  const items = _sortedFeeds(_statsGlobalData.by_feed);
+  if (!_statsVList || _statsVList.destroyed || _statsVList.host !== tbody) {
+    _statsVList = VList.mount(tbody, {
+      items,
+      key: (f) => f.feed_id,
+      shape: "table",
+      cols: 8,
+      render: _feedRow,
+      estimateHeight: 38,
+    });
+  } else {
+    _statsVList.setItems(items);
+  }
+}
+
+// Bound once per render of the table. It used to re-bind itself at the end of
+// every click handler, which added a second listener to each header on the
+// first sort, a third on the next, and so on — so the nth sort ran the handler
+// n times and the arrow direction flipped once per copy.
 function _wireSortHeaders() {
   document.querySelectorAll(".stats-th[data-sort]").forEach((th) => {
     th.addEventListener("click", () => {
@@ -918,15 +951,12 @@ function _wireSortHeaders() {
         _feedSortKey = key;
         _feedSortAsc = key === "title";
       }
-      // Re-render just the tbody
-      const tbody = document.querySelector(".stats-table tbody");
-      if (tbody) tbody.innerHTML = _sortedFeeds(_statsGlobalData.by_feed).map(_feedRow).join("");
+      _renderStatsRows();
       // Update header arrows
       document.querySelectorAll(".stats-th[data-sort]").forEach((t) => {
         const base = t.textContent.replace(/[▲▼\s]+$/, "").trim();
         t.textContent = base + (t.dataset.sort === _feedSortKey ? (_feedSortAsc ? " ▲" : " ▼") : "");
       });
-      _wireSortHeaders();
     });
   });
 }

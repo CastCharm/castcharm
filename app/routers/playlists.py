@@ -233,9 +233,22 @@ def reorder_episodes(playlist_id: int, body: PlaylistReorder, db: Session = Depe
         r.episode_id: r
         for r in db.query(PlaylistEpisode).filter(PlaylistEpisode.playlist_id == playlist_id)
     }
+    # An incomplete body is never a meaningful request, and silently accepting
+    # one corrupts the playlist: positions are assigned 0..n-1 to the ids that
+    # were sent while every omitted episode keeps its original position, so the
+    # two sets collide and the resulting order is arbitrary. The schema already
+    # states the contract ("a complete list, and truncating it would silently
+    # reorder into the wrong shape") — this enforces it, for every client rather
+    # than only the ones that remember.
+    sent = set(body.episode_ids)
+    if sent != set(rows) or len(body.episode_ids) != len(sent):
+        raise HTTPException(
+            400,
+            "Reorder must list every episode in the playlist exactly once "
+            f"({len(rows)} expected, {len(body.episode_ids)} received)",
+        )
     for pos, ep_id in enumerate(body.episode_ids):
-        if ep_id in rows:
-            rows[ep_id].position = pos
+        rows[ep_id].position = pos
     db.commit()
 
 
