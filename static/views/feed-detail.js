@@ -157,6 +157,29 @@ function _epMatches(ep, q, sf) {
 // The single seam between the model and the page. Swap this for a plain
 // innerHTML join to take virtualization out of the picture while diagnosing
 // something else.
+// An empty list has three quite different causes, and saying "nothing matches
+// the current filter" to someone looking at a playlist they have not put
+// anything in yet is just wrong. Recomputed on every render because the reason
+// changes as the user types.
+function _epEmptyHTML() {
+  const st = window._epState || {};
+  const nothingLoaded = !(st.eps || []).length;
+
+  if (nothingLoaded && st.playlistId) {
+    return `<div class="empty-state">
+      <div class="empty-state-title">No episodes yet</div>
+      <div class="empty-state-desc">No episodes have been added to this playlist.</div></div>`;
+  }
+  if (nothingLoaded) {
+    return `<div class="empty-state">
+      <div class="empty-state-title">No episodes found</div>
+      <div class="empty-state-desc">Sync the feed to fetch episodes.</div></div>`;
+  }
+  return `<div class="empty-state">
+    <div class="empty-state-title">No episodes found</div>
+    <div class="empty-state-desc">Nothing matches the current filter.</div></div>`;
+}
+
 function _epRender() {
   const st = window._epState;
   const host = document.getElementById("episode-list");
@@ -169,12 +192,13 @@ function _epRender() {
       items: st.visibleEps || [],
       key: (ep) => ep.id,
       render: (ep) => episodeRow(ep, feed, opts),
-      emptyHTML: `<div class="empty-state">
-        <div class="empty-state-title">No episodes found</div>
-        <div class="empty-state-desc">Nothing matches the current filter.</div></div>`,
+      emptyHTML: _epEmptyHTML(),
       onMount: _afterEpRender,
     });
   } else {
+    // Refreshed before the render, so the message matches the current reason
+    // rather than whichever one happened to apply when the list was mounted.
+    st.vlist.emptyHTML = _epEmptyHTML();
     st.vlist.setItems(st.visibleEps || []);
   }
 }

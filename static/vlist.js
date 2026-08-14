@@ -135,6 +135,10 @@ const VList = (() => {
 
       this._frame = 0;
       _instances.add(this);
+      // Mounting onto a detached host means the caller is rendering into a view
+      // that has already been replaced. Register nothing and stop here rather
+      // than leave a live listener behind for a page nobody is looking at.
+      if (!host.isConnected) { this.destroy(); return; }
       this.setItems(opts.items || []);
     }
 
@@ -191,7 +195,16 @@ const VList = (() => {
     }
 
     _paint() {
-      if (this.destroyed || !this.host.isConnected) return;
+      if (this.destroyed) return;
+      // A host that has left the document belongs to a view that is gone. That
+      // happens whenever an async continuation — a poll tick, a tab refresh
+      // resolving after navigation — renders into a page the router has already
+      // torn down. Such an instance would otherwise sit in the registry holding
+      // a scroll listener on #content, which survives navigation, and a
+      // ResizeObserver, until some later navigation happened to sweep it up.
+      // Self-destructing here covers every one of those paths without each
+      // caller having to remember.
+      if (!this.host.isConnected) { this.destroy(); return; }
 
       if (this.shape.dynamicCols) {
         const pr = this.shape.perRow(this.host);
@@ -353,11 +366,18 @@ const VList = (() => {
         for (const [, node] of this.mounted) node.remove();
         this.mounted.clear();
         this.pinned.clear();
-        if (this.emptyHTML && !host.querySelector(".vlist-empty")) {
-          const d = document.createElement("div");
-          d.className = "vlist-empty";
-          d.innerHTML = this.emptyHTML;
-          host.insertBefore(d, this.botSpacer);
+        if (this.emptyHTML) {
+          // Updated in place when it is already showing: the reason a list is
+          // empty can change without it ever becoming non-empty — typing into a
+          // filter that already matches nothing, for instance — and the message
+          // has to follow.
+          let d = host.querySelector(".vlist-empty");
+          if (!d) {
+            d = document.createElement("div");
+            d.className = "vlist-empty";
+            host.insertBefore(d, this.botSpacer);
+          }
+          if (d.innerHTML !== this.emptyHTML) d.innerHTML = this.emptyHTML;
         }
       } else {
         host.querySelector(".vlist-empty")?.remove();
