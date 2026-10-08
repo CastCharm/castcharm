@@ -1428,11 +1428,14 @@ async function viewFeedDetail(feedId) {
     const form = e.target;
     const raw = collectForm(form);
 
+    // Build the tag mapping from the known tag list.  Matching field names
+    // by the "id3_" prefix used to sweep in the "id3_enabled" checkbox itself,
+    // which put a boolean into a {tag: field} map and made the server reject
+    // the whole save with HTTP 422 whenever the toggle was on.
     const mapping = {};
-    for (const [k, v] of Object.entries(raw)) {
-      if (k.startsWith("id3_") && v) {
-        mapping[k.slice(4)] = v;
-      }
+    for (const tag of id3Tags) {
+      const v = raw[`id3_${tag.tag}`];
+      if (typeof v === "string" && v) mapping[tag.tag] = v;
     }
 
     // Validate title: can't be empty or whitespace

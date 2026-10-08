@@ -574,9 +574,12 @@ async function viewSettings() {
       return false;
     }
 
+    // Only the known tags, and only string values — a checkbox whose name
+    // happened to start with "id3_" must never end up in the mapping.
     const id3Mapping = {};
-    for (const [k, v] of Object.entries(raw)) {
-      if (k.startsWith("id3_") && v) id3Mapping[k.slice(4)] = v;
+    for (const tag of id3Tags) {
+      const v = raw[`id3_${tag.tag}`];
+      if (typeof v === "string" && v) id3Mapping[tag.tag] = v;
     }
     const payload = {
       download_path: raw.download_path,
