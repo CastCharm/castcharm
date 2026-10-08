@@ -7,6 +7,23 @@
 // plain URL strings for use in <audio src> and <a href> respectively.
 // ============================================================
 
+// Turn an error response body into something a person can act on.
+// FastAPI returns a plain string for HTTPException, an object for our own
+// structured errors, and for validation failures (422) a *list* of
+// {loc, msg} — which used to surface as a bare "HTTP 422".
+function _errorMessage(detail, fallback) {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    const parts = detail.map((d) => {
+      const loc = (d.loc || []).filter((p) => p !== "body").join(".");
+      return loc ? `${loc}: ${d.msg}` : d.msg;
+    }).filter(Boolean);
+    if (parts.length) return parts.join("; ");
+  }
+  if (detail && typeof detail === "object" && detail.message) return detail.message;
+  return fallback;
+}
+
 // We consolidate multipart form uploads into a shared helper so that
 // the fetch + error-extraction boilerplate isn't repeated for each endpoint.
 async function _upload(url, fieldName, file, extraFields) {
@@ -17,12 +34,10 @@ async function _upload(url, fieldName, file, extraFields) {
   }
   const res = await fetch(url, { method: "POST", body: fd });
   if (!res.ok) {
-    let msg = `HTTP ${res.status}`;
     let detail = null;
     try { const j = await res.json(); detail = j.detail; } catch (_) {}
-    msg = typeof detail === "string" ? detail : (detail?.message || msg);
-    const err = new Error(msg);
-    if (detail && typeof detail === "object") Object.assign(err, detail);
+    const err = new Error(_errorMessage(detail, `HTTP ${res.status}`));
+    if (detail && typeof detail === "object" && !Array.isArray(detail)) Object.assign(err, detail);
     throw err;
   }
   return res.json();
@@ -40,13 +55,11 @@ const API = {
       if (res.status === 401 && typeof window._onAuthRequired === "function") {
         window._onAuthRequired();
       }
-      let msg = `HTTP ${res.status}`;
       let detail = null;
       try { const j = await res.json(); detail = j.detail; } catch (_) {}
-      msg = typeof detail === "string" ? detail : (detail?.message || msg);
-      const err = new Error(msg);
+      const err = new Error(_errorMessage(detail, `HTTP ${res.status}`));
       err.status = res.status;
-      if (detail && typeof detail === "object") Object.assign(err, detail);
+      if (detail && typeof detail === "object" && !Array.isArray(detail)) Object.assign(err, detail);
       throw err;
     }
     if (res.status === 204) return null;
