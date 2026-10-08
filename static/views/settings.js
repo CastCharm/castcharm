@@ -217,6 +217,9 @@ async function viewSettings() {
                      style="max-width:120px" />
               <div class="form-hint">Mark an episode as played when this % of its duration has been listened to. Set to 0 to only mark played when the audio ends naturally. Default: 95%.</div>
             </div>
+            ${toggle("Listen to new podcasts in chronological order", "default_play_order_oldest",
+              (settings.default_play_order || "oldest") === "oldest",
+              "How Play behaves on any podcast you haven't set individually. On: start at the oldest episode and continue in order, like a story. Off: start with the newest episode. Each podcast can override this in its own settings.")}
           </div>
         </div>
 
@@ -267,9 +270,6 @@ async function viewSettings() {
               <div class="form-hint">Maximum number of RSS entries to inspect on each routine sync. Set to 0 for unlimited. Has no effect on the initial sync when a feed is first added, or when importing from XML. Default: 50.</div>
             </div>
 
-            ${toggle("Listen to new podcasts in chronological order", "default_play_order_oldest",
-              (settings.default_play_order || "oldest") === "oldest",
-              "How Play behaves on podcasts you add from now on. On: start at the oldest episode and continue in order, like a story. Off: start with the newest episode. Each podcast can override this in its own settings.")}
             ${toggle("Auto-download new episodes", "auto_download_new",
               settings.auto_download_new,
               "Automatically queue new episodes for download when first detected (does not apply to the initial import when a feed is added.")}
