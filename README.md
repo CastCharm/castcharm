@@ -2,7 +2,7 @@
 
 A self-hosted podcast manager with a clean web UI. Subscribe to RSS feeds, auto-download episodes, track playback, and manage your library — all from a single Docker container.
 
-**[castcharm.org](https://www.castcharm.org)** · [Installation guide](https://www.castcharm.org/install.html) · [Android app](https://www.castcharm.org/android.html)
+**[castcharm.org](https://www.castcharm.org)** · [Installation guide](https://www.castcharm.org/install.html) · [Android app](https://www.castcharm.org/android.html) · [Android source](https://github.com/CastCharm/castcharm-android)
 
 [![Version](https://img.shields.io/github/v/tag/CastCharm/castcharm?label=version&cacheSeconds=3600)](https://github.com/CastCharm/castcharm/tags)
 ![License](https://img.shields.io/github/license/CastCharm/castcharm?cacheSeconds=3600)
