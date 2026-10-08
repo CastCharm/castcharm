@@ -94,7 +94,14 @@ const API = {
 
   // ── Feeds ────────────────────────────────────────────────────
   getFeeds:     () =>         API.get("/api/feeds"),
-  addFeed:         (url, downloadAll = false, titleOverride = null) => API.post("/api/feeds", { url, download_all: downloadAll, title_override: titleOverride || undefined }),
+  addFeed:         (url, downloadAll = false, titleOverride = null, allowExistingFolder = false) =>
+    API.post("/api/feeds", {
+      url,
+      download_all: downloadAll,
+      title_override: titleOverride || undefined,
+      // Only ever true after the user has been shown the folder-conflict prompt.
+      allow_existing_folder: allowExistingFolder || undefined,
+    }),
   addManualFeed:   (title) =>   API.post("/api/feeds/manual", { title }),
   createFeedFromXml: (file, titleOverride) => _upload("/api/feeds/from-xml", "file", file, titleOverride ? { title_override: titleOverride } : null),
   getFeed:      (id) =>       API.get(`/api/feeds/${id}`),
@@ -207,7 +214,10 @@ const API = {
       revoke_other_sessions: !!extras.revoke_other_sessions,
       revoke_all_api_keys:   !!extras.revoke_all_api_keys,
     }),
-  disableAuth: () => API.post("/api/auth/disable"),
+  // Credentials are required by the server, not just a valid session — see
+  // disable_auth in app/routers/auth.py.
+  disableAuth: (username, password) =>
+    API.post("/api/auth/disable", { username, password }),
   completeSetup: (body) => API.post("/api/setup/complete", body),
   browseDirs: (path) => API.get(`/api/system/browse-dirs?path=${encodeURIComponent(path)}`),
 

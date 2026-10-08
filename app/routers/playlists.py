@@ -1,4 +1,5 @@
 import logging
+import os
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -17,7 +18,19 @@ def _episode_out(ep: Episode, db: Session) -> EpisodeOut:
     feed = db.get(Feed, ep.feed_id)
     d = EpisodeOut.model_validate(ep)
     d.feed_title = feed.title if feed else None
-    d.feed_image_url = feed.image_url if feed else None
+    # Artwork always resolves to this server, never to the podcast host — the
+    # same rule the episodes and feeds routers follow. This one served RSS URLs
+    # straight from the feed record, so a playlist was one more page quietly
+    # telling third parties who was reading it and when.
+    from app.routers.feeds import feed_cover_url
+    d.feed_image_url = feed_cover_url(feed, db) if feed else None
+    if not ep.custom_image_url:
+        art_path = os.path.splitext(ep.file_path)[0] + ".jpg" if ep.file_path else None
+        d.episode_image_url = (
+            f"/api/episodes/{ep.id}/cover.jpg"
+            if art_path and os.path.exists(art_path)
+            else None
+        )
     return d
 
 
@@ -220,9 +233,22 @@ def reorder_episodes(playlist_id: int, body: PlaylistReorder, db: Session = Depe
         r.episode_id: r
         for r in db.query(PlaylistEpisode).filter(PlaylistEpisode.playlist_id == playlist_id)
     }
+    # An incomplete body is never a meaningful request, and silently accepting
+    # one corrupts the playlist: positions are assigned 0..n-1 to the ids that
+    # were sent while every omitted episode keeps its original position, so the
+    # two sets collide and the resulting order is arbitrary. The schema already
+    # states the contract ("a complete list, and truncating it would silently
+    # reorder into the wrong shape") — this enforces it, for every client rather
+    # than only the ones that remember.
+    sent = set(body.episode_ids)
+    if sent != set(rows) or len(body.episode_ids) != len(sent):
+        raise HTTPException(
+            400,
+            "Reorder must list every episode in the playlist exactly once "
+            f"({len(rows)} expected, {len(body.episode_ids)} received)",
+        )
     for pos, ep_id in enumerate(body.episode_ids):
-        if ep_id in rows:
-            rows[ep_id].position = pos
+        rows[ep_id].position = pos
     db.commit()
 
 

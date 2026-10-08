@@ -4,6 +4,14 @@
 // Feeds list view
 // ============================================================
 let _feedsData = [];
+// What the search box currently admits — the grid renders this, _feedsData stays
+// the complete set.
+let _feedsVisible = null;
+let _feedsVList = null;
+// Cards are built on demand now, so a card scrolling into view has missed every
+// status tick that came before it. Keeping the last one lets the decorations be
+// re-applied to whatever has just been built.
+let _lastStatus = null;
 let _feedsSort = localStorage.getItem("feeds_sort") || "az";
 
 const _FEED_SORTS = [
@@ -34,53 +42,11 @@ function _sortFeeds(feeds) {
   return s;
 }
 
-function _flipReorderGrid(sortedFeeds) {
-  const grid = document.getElementById("feeds-grid");
-  if (!grid) return;
-
-  const cards = [...grid.querySelectorAll(".feed-card")];
-  if (cards.length < 2) return;
-
-  // 1. Snapshot current positions
-  const oldRects = new Map();
-  for (const c of cards) {
-    const r = c.getBoundingClientRect();
-    oldRects.set(c.dataset.id, { top: r.top, left: r.left });
-  }
-
-  // 2. Re-order DOM (append each in new order — moves to end of grid)
-  for (const feed of sortedFeeds) {
-    const card = grid.querySelector(`.feed-card[data-id="${feed.id}"]`);
-    if (card) grid.appendChild(card);
-  }
-
-  // 3. Apply inverse transforms so cards appear to stay in old positions
-  for (const card of cards) {
-    const old = oldRects.get(card.dataset.id);
-    if (!old || card.style.display === "none") continue;
-    const nr = card.getBoundingClientRect();
-    const dx = old.left - nr.left;
-    const dy = old.top  - nr.top;
-    if (dx !== 0 || dy !== 0) {
-      card.style.transition = "none";
-      card.style.transform  = `translate(${dx}px, ${dy}px)`;
-    }
-  }
-
-  // 4. Force reflow then let them slide to their new positions
-  grid.offsetHeight;
-  for (const card of cards) {
-    if (card.style.transform) {
-      card.style.transition = "transform 0.32s cubic-bezier(0.25, 0.8, 0.25, 1)";
-      card.style.transform  = "";
-    }
-  }
-  setTimeout(() => {
-    for (const card of grid.querySelectorAll(".feed-card")) {
-      card.style.transition = "";
-    }
-  }, 350);
-}
+// The FLIP reorder animation that used to live here has been removed. It
+// snapshotted every card's rectangle, re-appended them in the new order and
+// transformed each from its old position — which cannot work once only a
+// window of cards exists: a card moving from index 400 to index 2 has no old
+// rectangle to animate from. A cross-fade on the grid stands in for it.
 
 function _applyDeletingOverlays() {
   const ids = window._deletingFeedIds;
@@ -112,8 +78,8 @@ async function _refreshFeedsGrid() {
     if ((window.location.hash || "#/") === "#/feeds") await viewFeeds();
     return;
   }
-  grid.innerHTML = _sortFeeds(feeds).map(feedCard).join("");
-  _applyDeletingOverlays();
+  _feedsVisible = null;
+  window.filterFeedCards();   // re-applies the search box, then renders
   const sub = document.querySelector(".page-subtitle");
   if (sub) sub.textContent = `${feeds.length} podcast${feeds.length !== 1 ? "s" : ""}`;
 }
@@ -175,6 +141,7 @@ async function _refreshFeedCard(feedId) {
 }
 
 function _updateFeedActivityPips(s) {
+  _lastStatus = s;   // replayed onto cards that are built after this tick
   const grid = document.getElementById("feeds-grid");
   if (!grid) return;
   const dlIds   = new Set(s.downloading_feed_ids || []);
@@ -252,11 +219,11 @@ async function viewFeeds() {
             <div class="empty-state-desc">Add a podcast to get started.</div>
             <button class="btn btn-primary" id="btn-add-feed-empty">Add Your First Podcast</button>
           </div>`
-        : `<div class="feeds-grid" id="feeds-grid">
-            ${_sortFeeds(feeds).map(feedCard).join("")}
-          </div>`}
+        : `<div class="feeds-grid" id="feeds-grid"></div>`}
     </div>`;
 
+  _feedsVisible = null;
+  _renderFeedsGrid();
   _applyDeletingOverlays();
   document.getElementById("btn-add-feed")?.addEventListener("click", showAddFeedModal);
   document.getElementById("btn-add-feed-empty")?.addEventListener("click", showAddFeedModal);
@@ -264,7 +231,22 @@ async function viewFeeds() {
   document.getElementById("feed-sort")?.addEventListener("change", (e) => {
     _feedsSort = e.target.value;
     localStorage.setItem("feeds_sort", _feedsSort);
-    _flipReorderGrid(_sortFeeds(_feedsData));
+    // Cross-fade in place of the old per-card FLIP: the cards are rebuilt in
+    // the new order rather than slid from their previous positions, so there is
+    // nothing to animate between.
+    const grid = document.getElementById("feeds-grid");
+    if (grid) {
+      grid.style.transition = "opacity 0.16s ease";
+      grid.style.opacity = "0";
+      setTimeout(() => {
+        _renderFeedsGrid();
+        document.getElementById("content")?.scrollTo({ top: 0 });
+        grid.style.opacity = "1";
+        setTimeout(() => { grid.style.transition = ""; }, 200);
+      }, 160);
+    } else {
+      _renderFeedsGrid();
+    }
   });
 
   document.getElementById("opml-file-input")?.addEventListener("change", async (e) => {
@@ -442,14 +424,43 @@ function feedCard(f) {
   </div>`;
 }
 
+// Filters the data and re-windows, rather than hiding cards that are already in
+// the page. With a windowed grid most cards do not exist at any given moment, so
+// there is nothing to hide — and at archive scale (10,000 feeds) walking every
+// card per keystroke was the cost this change exists to remove.
 window.filterFeedCards = function () {
   const q = document.getElementById("feed-search")?.value.toLowerCase() || "";
-  for (const card of document.querySelectorAll(".feed-card")) {
-    const match =
-      card.dataset.title.includes(q) || card.dataset.author.includes(q);
-    card.style.display = match ? "" : "none";
-  }
+  _feedsVisible = q
+    ? _feedsData.filter((f) =>
+        (f.title || "").toLowerCase().includes(q) ||
+        (f.author || "").toLowerCase().includes(q))
+    : _feedsData;
+  _renderFeedsGrid();
 };
+
+// The single seam between the feeds model and the page.
+function _renderFeedsGrid() {
+  const grid = document.getElementById("feeds-grid");
+  if (!grid) return;
+  const items = _sortFeeds(_feedsVisible || _feedsData || []);
+  if (!_feedsVList || _feedsVList.destroyed || _feedsVList.host !== grid) {
+    _feedsVList = VList.mount(grid, {
+      items,
+      key: (f) => f.id,
+      shape: "grid",
+      render: feedCard,
+      // Cards are taller than list rows; a closer starting guess means the
+      // scrollbar settles in one frame rather than visibly resizing.
+      estimateHeight: 200,
+      onMount: () => {
+        _applyDeletingOverlays();
+        if (_lastStatus) _updateFeedActivityPips(_lastStatus);
+      },
+    });
+  } else {
+    _feedsVList.setItems(items);
+  }
+}
 
 function showAddFeedModal() {
   const IC = {
@@ -536,7 +547,17 @@ function showAddFeedModal() {
         try { feed = await API.addFeed(url, chkDlAll.checked); }
         catch (e) {
           if (e.conflict_title != null) {
-            goTo("rss-rename", { url, downloadAll: chkDlAll.checked, conflictTitle: e.conflict_title });
+            goTo("rss-rename", {
+              url,
+              downloadAll: chkDlAll.checked,
+              conflictTitle: e.conflict_title,
+              // Present only when the clash is a leftover folder on disk rather than
+              // another live podcast — the two need different wording, and only the
+              // folder case can be resolved by using it anyway.
+              folderConflict: e.folder_conflict === true,
+              folderPath: e.folder_path || null,
+              fileCount: e.file_count || 0,
+            });
             return;
           }
           errEl.textContent = e.message; errEl.style.display = "block";
@@ -556,13 +577,22 @@ function showAddFeedModal() {
 
     // ── Step 3a: RSS folder-name conflict rename ─────────────────────────
     else if (step === "rss-rename") {
-      const { url, downloadAll, conflictTitle } = data;
-      document.getElementById("modal-title").textContent = "Name Already In Use";
+      const { url, downloadAll, conflictTitle, folderConflict, folderPath, fileCount } = data;
+      document.getElementById("modal-title").textContent =
+        folderConflict ? "Folder Already Exists" : "Name Already In Use";
+      const intro = folderConflict
+        ? `A folder named <strong>${escHTML(conflictTitle)}</strong> already exists and contains
+           <strong>${fileCount}</strong> file${fileCount === 1 ? "" : "s"}. It's most likely left
+           over from a podcast that was removed without deleting its files.<br><br>
+           Enter a different folder name for this podcast, or use the existing folder anyway
+           (its files will be mixed in with this podcast's).`
+        : `A podcast named <strong>${escHTML(conflictTitle)}</strong> already exists.
+           Enter an alternative name for the new podcast's folder:`;
       B.innerHTML = `
         <p style="color:var(--text-2);font-size:13px;margin:0 0 14px;line-height:1.5">
-          A podcast named <strong>${conflictTitle}</strong> already exists.
-          Enter an alternative name for the new podcast's folder:
+          ${intro}
         </p>
+        ${folderConflict && folderPath ? `<div class="form-hint" style="margin:-8px 0 12px;word-break:break-all">${escHTML(folderPath)}</div>` : ""}
         <div class="form-group">
           <input class="form-control" id="rss-rename-input" type="text" value="${conflictTitle}" autocomplete="off" />
           <div class="form-hint" style="margin-top:5px">This name is used as the folder name only — the podcast title from the feed is kept as-is.</div>
@@ -570,12 +600,29 @@ function showAddFeedModal() {
         <div id="rss-rename-err" style="color:var(--error);font-size:13px;display:none;margin-bottom:8px"></div>
         <div class="modal-actions">
           <button class="btn btn-ghost" id="btn-wiz-back">Back</button>
+          ${folderConflict ? `<button class="btn btn-ghost" id="btn-rss-use-folder">Use Existing Folder</button>` : ""}
           <button class="btn btn-primary" id="btn-rss-rename-confirm">Add Podcast</button>
         </div>`;
       const nameIn = B.querySelector("#rss-rename-input");
       const errEl2 = B.querySelector("#rss-rename-err");
       B.querySelector("#btn-wiz-back").addEventListener("click", () => goTo("rss"));
       nameIn.select();
+
+      // Deliberate opt-in: keep the detected name, but tell the server the existing
+      // folder is acceptable so it stops refusing.
+      B.querySelector("#btn-rss-use-folder")?.addEventListener("click", async () => {
+        const btn = B.querySelector("#btn-rss-use-folder");
+        btn.disabled = true; btn.textContent = "Adding…"; errEl2.style.display = "none";
+        let feed;
+        try { feed = await API.addFeed(url, downloadAll, null, true); }
+        catch (e) {
+          errEl2.textContent = e.message; errEl2.style.display = "block";
+          btn.disabled = false; btn.textContent = "Use Existing Folder"; return;
+        }
+        Modal.close();
+        Toast.success("Podcast added — using the existing folder");
+        await _refreshFeedsGrid();
+      });
 
       async function submitRename() {
         const altName = nameIn.value.trim();

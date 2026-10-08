@@ -1,18 +1,20 @@
 import logging
 import os
+import time
 import tempfile
 import uuid as _uuid
 from datetime import datetime
 from typing import Optional
 
 log = logging.getLogger(__name__)
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, UploadFile, File, Form
 from app.downloader import enqueue_download
 from sqlalchemy import func, text, bindparam
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import Feed, Episode, GlobalSettings
+from app.limits import MAX_IDS_IN_URL, MAX_INDEX_IDS, MAX_PAGE_SIZE
 from app.utils import get_group_feed_ids
 from app.schemas import (
     FeedCreate, FeedUpdate, FeedOut, EpisodeOut, RSSSourceInfo,
@@ -113,6 +115,96 @@ def _merge_counts(primary_id: int, sub_ids: list[int], raw: dict[int, dict]) -> 
     }
 
 
+# Whether a podcast folder holds a cover.jpg, cached by folder path.
+#
+# This is asked once per feed every time a feed list is built — which is on
+# essentially every screen — to answer a question that only changes when someone
+# uploads or deletes a cover. On a normal disk that is a cheap stat; on anything
+# slower it is not. Measured inside this project's container, where /downloads is
+# a Windows path shared into Docker, a single os.path.exists here cost ~100 ms,
+# making /api/feeds the slowest endpoint in the app by two orders of magnitude.
+#
+# The TTL is a backstop for covers that appear by some path that forgets to
+# invalidate (a file dropped into the folder by hand, say). The explicit
+# invalidation below is what keeps it correct in normal use.
+_COVER_EXISTS_CACHE: dict[str, tuple[float, tuple[bool, bool]]] = {}
+_COVER_CACHE_TTL = 60.0
+
+
+def _local_cover_state(folder: str) -> tuple[bool, bool]:
+    """
+    (a cover.jpg is on disk, that cover is the user's own artwork).
+
+    Both facts are resolved and cached together. Asking them separately would
+    put a second filesystem read on the same per-feed path the cache above
+    exists to keep off, undoing the measured win it was written for.
+    """
+    now = time.monotonic()
+    cached = _COVER_EXISTS_CACHE.get(folder)
+    if cached is not None and now - cached[0] < _COVER_CACHE_TTL:
+        return cached[1]
+    exists = os.path.exists(os.path.join(folder, "cover.jpg"))
+    user_owned = False
+    if exists:
+        from app.downloader import read_cover_source
+        user_owned = read_cover_source(folder) is None
+    state = (exists, user_owned)
+    _COVER_EXISTS_CACHE[folder] = (now, state)
+    return state
+
+
+def _has_local_cover(folder: str) -> bool:
+    return _local_cover_state(folder)[0]
+
+
+# Resolved artwork URL per feed id. Separate from the per-folder cache above
+# because the expensive part here is get_podcast_folder(), which costs a
+# settings query — and the callers include per-episode serialisation, where a
+# query each would be a page-load's worth of them.
+_FEED_COVER_URL_CACHE: dict[int, tuple[float, str | None]] = {}
+
+
+def feed_cover_url(feed, db) -> str | None:
+    """
+    The artwork URL a client should be handed for this feed: this server's cover
+    endpoint, the user's own custom URL, or nothing.
+
+    Never the feed's RSS artwork URL — serving that is what had browsers fetching
+    art straight from podcast hosts, disclosing the user's address and reading
+    times. Returning None where we hold no cover is deliberate: the client draws
+    its placeholder, which is a local, private failure. Pointing at a cover
+    endpoint that would 404 is not better; it just moves the noise.
+    """
+    if feed.custom_image_url:
+        return feed.custom_image_url
+    now = time.monotonic()
+    cached = _FEED_COVER_URL_CACHE.get(feed.id)
+    if cached is not None and now - cached[0] < _COVER_CACHE_TTL:
+        return cached[1]
+    url = None
+    try:
+        from app.downloader import get_podcast_folder
+        folder = get_podcast_folder(feed, db)
+        if folder and _has_local_cover(folder):
+            url = f"/api/feeds/{feed.id}/cover.jpg"
+    except Exception:
+        pass
+    _FEED_COVER_URL_CACHE[feed.id] = (now, url)
+    return url
+
+
+def invalidate_cover_cache(folder: str | None = None) -> None:
+    """Forget cached cover state — for one folder, or all of them."""
+    if folder is None:
+        _COVER_EXISTS_CACHE.clear()
+    else:
+        _COVER_EXISTS_CACHE.pop(folder, None)
+    # The per-feed URL cache is keyed by id, so a folder-scoped invalidation
+    # cannot find its entry. It is small, and a cover change is rare, so drop
+    # the lot rather than leave a stale URL behind whichever way it is called.
+    _FEED_COVER_URL_CACHE.clear()
+
+
 def _feed_out(feed: Feed, db: Session, counts: dict | None = None) -> FeedOut:
     if counts is None:
         # Single-feed path: run individual queries (add_feed, get_feed, etc.)
@@ -135,15 +227,22 @@ def _feed_out(feed: Feed, db: Session, counts: dict | None = None) -> FeedOut:
     data.needs_rename             = counts["needs_rename"]
     data.last_download_at         = counts["last_download_at"]
 
-    # Prefer local cover.jpg over remote URL when no custom_image_url is set
+    # Two questions that used to share one answer:
+    #   which URL should a client load?  — ours, whenever the file is on disk.
+    #   is that artwork the USER's?      — only if they set a custom URL or put
+    #                                      the file there themselves.
+    # Covers are now fetched for every feed, so answering the second with the
+    # first would have the settings panel claim custom artwork on all of them
+    # and offer to "remove" art the user never chose.
     has_custom_cover = bool(feed.custom_image_url)
     try:
         from app.downloader import get_podcast_folder
         folder = get_podcast_folder(feed, db)
         data.podcast_folder = folder
-        if not feed.custom_image_url and os.path.exists(os.path.join(folder, "cover.jpg")):
-            data.image_url = f"/api/feeds/{feed.id}/cover.jpg"
-            has_custom_cover = True
+        data.image_url = feed_cover_url(feed, db)
+        if not feed.custom_image_url:
+            _, user_owned = _local_cover_state(folder)
+            has_custom_cover = data.image_url is not None and user_owned
     except Exception:
         pass
     data.has_custom_cover = has_custom_cover
@@ -165,6 +264,46 @@ def _check_title_conflict(title: str, db: Session, exclude_id: int | None = None
         if existing and existing == target:
             return f
     return None
+
+
+def _existing_folder_conflict(
+    title: str, db: Session, feed: Feed | None = None
+) -> tuple[str, int] | None:
+    """Return (path, file_count) when a download folder for *title* already has files.
+
+    Podcast folders are named after the title, so a podcast that was removed while
+    its audio was kept leaves a folder that a later, unrelated podcast of the same
+    name would silently adopt — inheriting its files and its cover art. Detecting it
+    lets the caller ask the user instead of guessing.
+
+    Empty directories are ignored: nothing can be inherited from them, so prompting
+    would be noise.
+    """
+    from app.downloader import sanitize_filename
+
+    folder_name = sanitize_filename(title)
+    if not folder_name:
+        return None
+
+    # Honour a per-feed download_path override; otherwise the global setting. Without
+    # this, a feed filed under a custom directory would be checked against the wrong
+    # place — reporting a phantom clash, or missing a real one.
+    gs = db.query(GlobalSettings).first()
+    base_dir = (
+        (feed.download_path if feed else None)
+        or (gs.download_path if gs else None)
+        or "/downloads"
+    )
+    path = os.path.join(base_dir, folder_name)
+    if not os.path.isdir(path):
+        return None
+
+    try:
+        count = sum(len(files) for _root, _dirs, files in os.walk(path))
+    except OSError:
+        return None
+
+    return (path, count) if count > 0 else None
 
 
 @router.get("", response_model=list[FeedOut])
@@ -230,6 +369,33 @@ def add_feed(body: FeedCreate, background_tasks: BackgroundTasks, db: Session = 
                 status_code=409,
                 detail={"message": "A podcast with this name already exists.", "conflict_title": folder_name},
             )
+
+        # No live feed owns the name, but a folder from a previously removed podcast
+        # may still be sitting there. Adopting it silently would mix two podcasts'
+        # files together and hand the new one the old one's cover art, so ask first.
+        # conflict_title is included so existing clients route this into the same
+        # "pick another name" flow they already use for the conflict above.
+        if not body.allow_existing_folder:
+            existing_folder = _existing_folder_conflict(folder_name, db)
+            if existing_folder:
+                path, file_count = existing_folder
+                db.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": (
+                            f'A folder named "{folder_name}" already exists and contains '
+                            f'{file_count} file{"" if file_count == 1 else "s"}. It is probably '
+                            "left over from a podcast that was removed without deleting its "
+                            "files. Choose a different folder name, or use this folder anyway."
+                        ),
+                        "conflict_title": folder_name,
+                        "folder_conflict": True,
+                        "folder_path": path,
+                        "file_count": file_count,
+                    },
+                )
+
     if body.title_override:
         feed.podcast_group = body.title_override.strip()
 
@@ -250,6 +416,26 @@ def add_manual_feed(body: ManualFeedCreate, db: Session = Depends(get_db)):
     """Create a feed entry without an RSS URL (e.g. for defunct/offline podcasts)."""
     import uuid
     title = body.title.strip()
+    # Same folder guard as add_feed: a manual podcast is filed by title too, so it can
+    # land on a directory left behind by one that was removed.
+    if not body.allow_existing_folder:
+        existing_folder = _existing_folder_conflict(title, db)
+        if existing_folder:
+            path, file_count = existing_folder
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": (
+                        f'A folder named "{title}" already exists and contains '
+                        f'{file_count} file{"" if file_count == 1 else "s"}. Choose a different '
+                        "name, or use this folder anyway."
+                    ),
+                    "conflict_title": title,
+                    "folder_conflict": True,
+                    "folder_path": path,
+                    "file_count": file_count,
+                },
+            )
     conflict = _check_title_conflict(title, db)
     if conflict:
         raise HTTPException(
@@ -307,11 +493,66 @@ def update_feed(feed_id: int, body: FeedUpdate, background_tasks: BackgroundTask
         raise HTTPException(status_code=404, detail="Feed not found")
 
     updates = body.model_dump(exclude_unset=True)
+    # Not a column on Feed — must come out before the setattr loop below, which would
+    # otherwise try to assign it to the model.
+    allow_existing_folder = bool(updates.pop("allow_existing_folder", False))
+
     url_changed = False
     if "url" in updates and updates["url"]:
         updates["url"] = resolve_feed_url(updates["url"])
         if updates["url"] != feed.url:
             url_changed = True
+
+    # A folder move is driven solely by podcast_group. A title rename does NOT move
+    # the folder — the block below pins podcast_group to the old title precisely to
+    # keep the path stable — so only an explicit podcast_group change is checked.
+    #
+    # Guarded exactly like creation: refuse to point this podcast at a folder another
+    # live podcast owns, or at a directory left behind by one that was removed. Note
+    # that renaming never moves existing files, so the podcast would simply start
+    # writing into someone else's directory.
+    #
+    # Runs before any field is applied, so there is nothing to roll back on refusal.
+    if "podcast_group" in updates:
+        from app.downloader import sanitize_filename
+
+        new_folder_name = (updates["podcast_group"] or feed.title or "").strip()
+        current_folder_name = (feed.podcast_group or feed.title or "").strip()
+        moved = (
+            sanitize_filename(new_folder_name).lower()
+            != sanitize_filename(current_folder_name).lower()
+        )
+
+        if new_folder_name and moved:
+            conflict = _check_title_conflict(new_folder_name, db, exclude_id=feed.id)
+            if conflict:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "A podcast with this name already exists.",
+                        "conflict_title": new_folder_name,
+                    },
+                )
+
+            if not allow_existing_folder:
+                existing_folder = _existing_folder_conflict(new_folder_name, db, feed)
+                if existing_folder:
+                    path, file_count = existing_folder
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "message": (
+                                f'A folder named "{new_folder_name}" already exists and contains '
+                                f'{file_count} file{"" if file_count == 1 else "s"}. Renaming this '
+                                "podcast into it would mix the two together — existing files are "
+                                "not moved. Choose a different name, or use this folder anyway."
+                            ),
+                            "conflict_title": new_folder_name,
+                            "folder_conflict": True,
+                            "folder_path": path,
+                            "file_count": file_count,
+                        },
+                    )
 
     # Handle title rename: pin podcast_group to preserve folder path
     title_changed = False
@@ -415,9 +656,14 @@ def delete_feed(feed_id: int, delete_files: bool = False, force: bool = False, d
                     except OSError:
                         pass
 
-        # Remove app-generated non-audio files that the episode loop doesn't cover
+        # Remove app-generated non-audio files that the episode loop doesn't cover.
+        # Deliberately confined to the delete_files branch: cover.jpg is where
+        # upload_feed_cover() stores user-uploaded artwork, so it is not always
+        # something this app generated, and a delete that promised to keep the
+        # user's files must not quietly remove it.
         if podcast_folder and os.path.isdir(podcast_folder):
-            for fname in ("cover.jpg", "complete-feed.xml", "castcharm.json"):
+            invalidate_cover_cache()
+            for fname in ("cover.jpg", ".cover-source", "complete-feed.xml", "castcharm.json"):
                 p = os.path.join(podcast_folder, fname)
                 if os.path.exists(p):
                     try:
@@ -515,14 +761,40 @@ def clear_feed_error(feed_id: int, db: Session = Depends(get_db)):
 def get_feed_episodes(
     feed_id: int,
     include_hidden: bool = False,
-    limit: int = 200,
-    offset: int = 0,
+    limit: int = Query(200, ge=1, le=MAX_PAGE_SIZE),
+    offset: int = Query(0, ge=0),
     order: str = "desc",
+    ids: str | None = None,
     db: Session = Depends(get_db),
 ):
+    """Episodes for a feed, either a slice by offset or a specific set by id.
+
+    `ids` (comma-separated) is what a windowed client should use. Addressing rows
+    by offset requires the caller's idea of the ordering to match this endpoint's
+    exactly, which stops being true the moment the caller is working from a
+    filtered index — offset 50 of "unplayed" is not offset 50 of everything. Ids
+    say what is actually wanted, so the two can never drift.
+    """
     feed = db.query(Feed).filter(Feed.id == feed_id).first()
     if not feed:
         raise HTTPException(status_code=404, detail="Feed not found")
+
+    wanted_ids: list[int] | None = None
+    if ids is not None:
+        # Count before parsing. Checking the length of the parsed list would mean
+        # having already converted every element of whatever was sent, which makes
+        # the rejection cost scale with the size of the thing being rejected.
+        parts = [x for x in ids.split(",") if x.strip()]
+        if not parts:
+            return []
+        if len(parts) > MAX_IDS_IN_URL:
+            raise HTTPException(
+                status_code=400, detail=f"Too many ids (max {MAX_IDS_IN_URL})"
+            )
+        try:
+            wanted_ids = [int(x) for x in parts]
+        except ValueError:
+            raise HTTPException(status_code=400, detail="ids must be comma-separated integers")
 
     # Include episodes from supplementary feeds linked to this one
     all_feed_ids = get_group_feed_ids(db, feed_id)
@@ -547,43 +819,119 @@ def get_feed_episodes(
         q = q.order_by(*episode_order_key())
     else:
         q = q.order_by(Episode.published_at.desc().nullslast(), Episode.id.desc())
-    episodes = q.offset(offset).limit(limit).all()
 
-    # Pre-resolve effective image URL for each feed in the group (cover.jpg > custom > RSS URL)
-    feed_art: dict[int, str | None] = {}
-    try:
-        from app.downloader import get_podcast_folder
-        for fid, src in feed_map.items():
-            if src.custom_image_url:
-                feed_art[fid] = src.custom_image_url
-            else:
-                try:
-                    folder = get_podcast_folder(src, db)
-                    if folder and os.path.exists(os.path.join(folder, "cover.jpg")):
-                        feed_art[fid] = f"/api/feeds/{fid}/cover.jpg"
-                    else:
-                        feed_art[fid] = src.image_url
-                except Exception:
-                    feed_art[fid] = src.image_url
-    except Exception:
-        for fid, src in feed_map.items():
-            feed_art[fid] = src.custom_image_url or src.image_url
+    if wanted_ids is not None:
+        # An explicit set — no window to slice. The feed/hidden filters above still
+        # apply, so this cannot be used to read episodes from another feed or to
+        # see hidden ones without asking for them.
+        episodes = q.filter(Episode.id.in_(wanted_ids)).all()
+    else:
+        episodes = q.offset(offset).limit(limit).all()
+
+    # Pre-resolve effective image URL for each feed in the group: cover.jpg, or
+    # the user's own custom URL, and otherwise nothing.
+    #
+    # The RSS artwork URL is deliberately NOT a fallback here. This endpoint
+    # builds a whole page of episode rows, so passing it through had every row
+    # fetch art from the podcast host — measured at 305 requests to one third
+    # party from a single feed page, each one disclosing the user's address and
+    # the moment they opened it. A missing cover is a placeholder now; the sync
+    # that fetches artwork will fill it in.
+    feed_art: dict[int, str | None] = {
+        fid: feed_cover_url(src, db) for fid, src in feed_map.items()
+    }
 
     result = []
     for ep in episodes:
         out = EpisodeOut.model_validate(ep)
         src = feed_map.get(ep.feed_id, feed)
         out.feed_title = src.title
-        out.feed_image_url = feed_art.get(ep.feed_id, src.image_url)
-        # Prefer local art sidecar over remote URL when no custom_image_url is set
-        if not ep.custom_image_url and ep.file_path:
-            art_path = os.path.splitext(ep.file_path)[0] + ".jpg"
-            if os.path.exists(art_path):
-                out.episode_image_url = f"/api/episodes/{ep.id}/cover.jpg"
+        out.feed_image_url = feed_art.get(ep.feed_id)
+        # Local art sidecar or nothing, never the RSS URL — same rule as
+        # _ep_out in episodes.py, and for the same reason: this endpoint builds
+        # a whole page of rows, so a remote value here is a page-load's worth of
+        # requests to a podcast host.
+        if not ep.custom_image_url:
+            art_path = os.path.splitext(ep.file_path)[0] + ".jpg" if ep.file_path else None
+            out.episode_image_url = (
+                f"/api/episodes/{ep.id}/cover.jpg"
+                if art_path and os.path.exists(art_path)
+                else None
+            )
         if ep.status == "downloaded" and ep.file_path and not os.path.exists(ep.file_path):
             out.file_missing = True
         result.append(out)
     return result
+
+
+@router.get("/{feed_id}/episode-index")
+def get_feed_episode_index(
+    feed_id: int,
+    include_hidden: bool = False,
+    filter: str = "all",
+    order: str = "desc",
+    db: Session = Depends(get_db),
+):
+    """Return this feed's episode ids, in display order, and nothing else.
+
+    A client that only has /episodes cannot answer "where does episode 12345 sit
+    in this feed?" without pulling every episode above it. That is why jumping to
+    something a few hundred back used to mean fetching thousands of full episode
+    records: the app had to walk the list until the target appeared.
+
+    This is the walk, done as one indexed query. The response is just ids, so a
+    2,000-episode feed costs ~12 KB instead of several megabytes, and the caller
+    can then find any position with a local lookup and fetch only the one page it
+    actually needs to draw via /episodes?offset=.
+
+    The filter, the group expansion and the ORDER BY are kept identical to
+    get_feed_episodes above — if the two ever disagree, offsets computed from this
+    index address the wrong rows.
+    """
+    feed = db.query(Feed).filter(Feed.id == feed_id).first()
+    if not feed:
+        raise HTTPException(status_code=404, detail="Feed not found")
+
+    all_feed_ids = get_group_feed_ids(db, feed_id)
+
+    q = db.query(Episode.id).filter(
+        Episode.feed_id.in_(all_feed_ids), Episode.status != "skipped"
+    )
+    if not include_hidden:
+        q = q.filter(Episode.hidden.is_(False))
+
+    # "downloaded" is deliberately absent: on the phone that filter means "the
+    # file is on this device", which is local state the server cannot know.
+    if filter == "unplayed":
+        q = q.filter(Episode.played.is_(False))
+    elif filter == "in_progress":
+        q = q.filter(Episode.played.is_(False), Episode.play_position_seconds > 0)
+    elif filter not in ("all", ""):
+        raise HTTPException(status_code=400, detail=f"Unknown filter: {filter}")
+
+    if order == "asc":
+        q = q.order_by(Episode.published_at.asc().nullsfirst(), Episode.id.asc())
+    else:
+        q = q.order_by(Episode.published_at.desc().nullslast(), Episode.id.desc())
+
+    # Scalar id query, so the cost per episode is a single integer rather than a
+    # hydrated ORM object — which is what makes describing a whole feed in one
+    # response affordable at all. The ceiling is a backstop against a pathological
+    # feed, not a page size: a client that hits it sees a shortened feed, which is
+    # a far better failure than the server running out of memory.
+    ids = [row[0] for row in q.limit(MAX_INDEX_IDS + 1).all()]
+    truncated = len(ids) > MAX_INDEX_IDS
+    if truncated:
+        ids = ids[:MAX_INDEX_IDS]
+        log.warning(
+            "Feed %d has more than %d visible episodes; episode index truncated",
+            feed_id,
+            MAX_INDEX_IDS,
+        )
+    # total is the length of what was returned, not the feed's real size — when
+    # truncated is set, the feed has more. Named for what a caller can rely on:
+    # ids[i] is position i, and there are total of them.
+    return {"total": len(ids), "ids": ids, "truncated": truncated}
 
 
 @router.get("/{feed_id}/rss-sources", response_model=list[RSSSourceInfo])
@@ -934,7 +1282,13 @@ def import_status(feed_id: int, db: Session = Depends(get_db)):
     from app.importer import get_import_status
     status = get_import_status(feed_id)
     if status is None:
-        raise HTTPException(status_code=404, detail="No import job found for this feed")
+        # "Nothing is importing" is an answer, not a missing resource — the
+        # import status of this feed exists, and its value is idle. Raising 404
+        # for it put a failed request and a console error on every feed page
+        # load, which is noise in the one place you go looking when something is
+        # actually wrong. Shape matches import_preview_status below, which has
+        # always answered the same question this way.
+        return {"status": "idle"}
     return status
 
 
@@ -1060,6 +1414,14 @@ async def upload_feed_cover(
             raise HTTPException(status_code=400, detail="File is not a valid image")
         with open(cover_path, "wb") as f:
             f.write(contents)
+        # Hand ownership of this file to the user: dropping the source marker is
+        # what stops the next feed refresh from fetching the RSS artwork back
+        # over the top of what they just uploaded.
+        from app.downloader import clear_cover_source
+        clear_cover_source(folder)
+        # The folder now has a cover that _feed_out would otherwise not notice
+        # until the TTL lapsed.
+        invalidate_cover_cache(folder)
     except HTTPException:
         raise
     except Exception as exc:
@@ -1084,6 +1446,14 @@ def delete_feed_cover(feed_id: int, db: Session = Depends(get_db)):
         cover_path = os.path.join(folder, "cover.jpg")
         if os.path.exists(cover_path):
             os.remove(cover_path)
+        # Drop the marker too, so the folder is left in a clean state rather
+        # than one claiming a cover that is no longer there. The next refresh
+        # re-fetches the RSS artwork, which is the art the user is asking to
+        # fall back to — served by us, so removing a custom cover does not
+        # quietly put the browser back in touch with the podcast host.
+        from app.downloader import clear_cover_source
+        clear_cover_source(folder)
+        invalidate_cover_cache(folder)
     except Exception:
         pass
     feed.custom_image_url = None
@@ -1442,6 +1812,7 @@ def run_feed_autoclean(feed_id: int, db: Session = Depends(get_db)):
 async def create_feed_from_xml(
     file: UploadFile = File(...),
     title_override: Optional[str] = Form(None),
+    allow_existing_folder: bool = Form(False),
     db: Session = Depends(get_db),
 ):
     """Create a new podcast feed by uploading a local RSS/XML file.
@@ -1492,6 +1863,24 @@ async def create_feed_from_xml(
                              or (itunes_img if isinstance(itunes_img, str) else None))
 
         # Check for folder-name conflict before committing anything
+        if not allow_existing_folder:
+            existing_folder = _existing_folder_conflict(feed_title, db)
+            if existing_folder:
+                path, file_count = existing_folder
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": (
+                            f'A folder named "{feed_title}" already exists and contains '
+                            f'{file_count} file{"" if file_count == 1 else "s"}. Choose a '
+                            "different name, or use this folder anyway."
+                        ),
+                        "conflict_title": feed_title,
+                        "folder_conflict": True,
+                        "folder_path": path,
+                        "file_count": file_count,
+                    },
+                )
         conflict = _check_title_conflict(feed_title, db)
         if conflict:
             raise HTTPException(
@@ -1554,7 +1943,15 @@ async def import_opml(
 ):
     """Import feeds from an OPML file. Returns counts of added/skipped/failed feeds."""
     import xml.etree.ElementTree as ET
-    content = await file.read()
+
+    # The other XML upload routes all cap their read; this one did not, so an
+    # upload of any size went straight into memory and then into the parser. An
+    # OPML file is a list of feed URLs — 5 MB is already an implausibly large one.
+    _OPML_MAX_BYTES = 5 * 1024 * 1024
+    content = await file.read(_OPML_MAX_BYTES + 1)
+    if len(content) > _OPML_MAX_BYTES:
+        log.warning("OPML upload rejected: file too large (>%d bytes)", _OPML_MAX_BYTES)
+        raise HTTPException(status_code=413, detail="OPML file too large (max 5 MB)")
     try:
         root = ET.fromstring(content)
     except ET.ParseError as exc:

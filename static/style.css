@@ -695,7 +695,11 @@ img { display: block; }
 .episode-item.has-notes { cursor: pointer; }
 .episode-item.has-notes .btn { cursor: pointer; } /* restore default for buttons inside */
 
-.episode-item:last-child { border-bottom: none; }
+/* The windowed list keeps a spacer element after the last row, so :last-child
+   stops matching the row the user actually sees as last and the card picks up a
+   doubled line at its foot. */
+.episode-item:last-child,
+.episode-item:has(+ .vlist-spacer) { border-bottom: none; }
 .episode-item:hover { background: var(--bg-3); }
 
 .episode-art {
@@ -2890,9 +2894,55 @@ mark.xml-diff-add {
 .ep-drag-handle { display: flex; align-items: center; color: var(--text-3); cursor: grab; padding: 0 2px; flex-shrink: 0; touch-action: none; }
 .ep-drag-handle:active { cursor: grabbing; }
 .episode-item.dragging { opacity: 0.4; }
-.episode-item.drag-over-top { box-shadow: 0 -2px 0 var(--accent) !important; }
-.episode-item.drag-over-bottom { box-shadow: 0 2px 0 var(--accent) !important; }
-.pl-detail-page .episode-list { display: flex; flex-direction: column; gap: 6px; padding: 4px 0; }
-.pl-detail-page .episode-item { border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; }
-.pl-detail-page .episode-item.drag-over-top { box-shadow: 0 -3px 0 var(--accent) !important; border-radius: 8px; }
-.pl-detail-page .episode-item.drag-over-bottom { box-shadow: 0 3px 0 var(--accent) !important; border-radius: 8px; }
+/* These referenced var(--accent), which is not defined anywhere in the theme —
+   the palette calls this colour --primary. An undefined custom property makes
+   the whole declaration invalid, so no drop indicator was ever drawn and the
+   target position had to be guessed. */
+.episode-item.drag-over-top { box-shadow: 0 -2px 0 var(--primary) !important; }
+.episode-item.drag-over-bottom { box-shadow: 0 2px 0 var(--primary) !important; }
+/* The row spacing is a margin rather than the container's `gap` because the
+   windowed list puts a spacer element at each end, and flex `gap` would add a
+   phantom 6px either side of the visible rows — enough to make the scrollbar
+   disagree with the content by a couple of rows over a long playlist. A margin
+   belongs to the row, so it is included when the row is measured. */
+.pl-detail-page .episode-list { display: flex; flex-direction: column; padding: 4px 0; }
+/* position:relative so the drop indicator below can be placed against the row.
+   Scoped to the playlist page to keep it away from the feed list, and safe for
+   the row's "..." dropdown, which anchors to .ep-more-wrap rather than the row. */
+.pl-detail-page .episode-item { position: relative; border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; margin-bottom: 6px; }
+.pl-detail-page .episode-item:last-child { margin-bottom: 0; }
+
+/* The drop indicator is a bar drawn in the 6px gap between rows, so it reads as
+   a gap the episode will be inserted into rather than as a highlight on the row
+   it happens to be hovering. A box-shadow on the row edge — the previous
+   approach — follows the 8px border radius and tapers at both ends, which is
+   exactly where you need it to be clearest when judging a drop position. */
+.pl-detail-page .episode-item.drag-over-top::before,
+.pl-detail-page .episode-item.drag-over-bottom::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 3px;
+  border-radius: 3px;
+  background: var(--primary);
+  box-shadow: 0 0 0 1px var(--bg), 0 0 8px var(--primary);
+  z-index: 3;
+  pointer-events: none;
+}
+.pl-detail-page .episode-item.drag-over-top::before  { top: -5px; }
+.pl-detail-page .episode-item.drag-over-bottom::after { bottom: -5px; }
+/* The last row has no bottom margin, so its indicator would sit past the end of
+   the list. Pull it into the container's 4px padding instead. */
+.pl-detail-page .episode-item:last-child.drag-over-bottom::after { bottom: -3px; }
+
+/* ── Windowed lists (vlist.js) ─────────────────────────────────────────── */
+/* The two spacers stand in for the rows that are not currently built, so the
+   scrollbar reflects the whole list rather than the handful of visible rows.
+   They must never receive borders, padding or flex growth of their own. */
+.vlist-spacer { flex: 0 0 auto; padding: 0; margin: 0; border: 0; background: none; pointer-events: none; }
+/* Chrome tries to keep the content under the viewport steady when something
+   above it resizes — which is what a spacer does on every scroll frame. Left
+   on, it fights the window and shows up as judder that is very hard to trace
+   back to here. */
+#content, .vlist-host { overflow-anchor: none; }

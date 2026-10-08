@@ -4,7 +4,10 @@
 // Login overlay
 // ============================================================
 
-function showLoginOverlay() {
+// notice: optional line shown above the form, e.g. why the user is suddenly
+// looking at it. Being returned to a login screen with no explanation is the
+// kind of thing people read as the app having broken.
+function showLoginOverlay(notice) {
   let overlay = document.getElementById("login-overlay");
   if (!overlay) {
     overlay = document.createElement("div");
@@ -41,6 +44,14 @@ function showLoginOverlay() {
     </div>`;
 
   overlay.style.display = "flex";
+
+  if (notice) {
+    const errEl = document.getElementById("login-error");
+    if (errEl) {
+      errEl.textContent = notice;
+      errEl.style.display = "";
+    }
+  }
 
   document.getElementById("login-form").addEventListener("submit", async (e) => {
     e.preventDefault();

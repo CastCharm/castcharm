@@ -631,6 +631,21 @@ def sync_feed_episodes(
             new_pending_episodes.append(episode)
 
     db.flush()
+
+    # Pull the feed's artwork down while we are here. Every refresh path — the
+    # scheduler, a manual sync, an XML import, the startup scan — funnels through
+    # this function, so hooking it here is what makes "the server holds the art,
+    # not the browser" true everywhere rather than only where someone remembered.
+    # Best-effort: artwork must never be the reason a sync reports failure.
+    try:
+        from app.downloader import get_podcast_folder, ensure_feed_cover
+        from app.routers.feeds import invalidate_cover_cache
+        folder = get_podcast_folder(feed, db)
+        if ensure_feed_cover(feed, folder):
+            invalidate_cover_cache(folder)
+    except Exception as exc:
+        log.warning("Could not refresh cover art for feed %d: %s", feed.id, exc)
+
     new_ids = [ep.id for ep in new_pending_episodes]
     if new_ids:
         log.info(

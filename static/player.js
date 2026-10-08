@@ -80,6 +80,14 @@ const Player = (() => {
         const intPct = Math.min(100, Math.floor(pct));
         if (intPct !== _lastDisplayedPct) {
           _lastDisplayedPct = intPct;
+          // Record the position on the model too. episodeRow() already renders
+          // a listen bar from play_position_seconds, so keeping this up to date
+          // is what makes the bar survive the row being scrolled away and
+          // rebuilt — previously the injected markup below was simply lost.
+          if (typeof _epGet === "function") {
+            const modelEp = _epGet(_currentEp.id);
+            if (modelEp) modelEp.play_position_seconds = Math.floor(_audio.currentTime);
+          }
           const row = document.getElementById(`ep-${_currentEp.id}`);
           if (row) {
             const fill = row.querySelector(".ep-listen-fill");
@@ -649,6 +657,12 @@ const Player = (() => {
 
         const finish = () => {
           API.togglePlayed(epId).catch(() => {});
+          // Model first: the row below may not exist, and without this the
+          // played state would be lost the moment the list re-rendered.
+          if (typeof _epGet === "function") {
+            const modelEp = _epGet(epId);
+            if (modelEp) modelEp.played = true;
+          }
           const row = document.getElementById(`ep-${epId}`);
           const fill = row?.querySelector(".ep-listen-fill");
           const label = row?.querySelector(".ep-listen-label");
@@ -678,6 +692,12 @@ const Player = (() => {
 
         const finish = () => {
           API.togglePlayed(epId).catch(() => {});
+          // Model first: the row below may not exist, and without this the
+          // played state would be lost the moment the list re-rendered.
+          if (typeof _epGet === "function") {
+            const modelEp = _epGet(epId);
+            if (modelEp) modelEp.played = true;
+          }
           const row = document.getElementById(`ep-${epId}`);
           const fill = row?.querySelector(".ep-listen-fill");
           const label = row?.querySelector(".ep-listen-label");

@@ -409,13 +409,20 @@ def get_global_stats(db: Session = Depends(get_db)):
     partial_by = _partially_played_by_feed(all_feed_ids, db)
     played_not_dl_by = _played_not_downloaded_by_feed(all_feed_ids, db)
 
+    from app.routers.feeds import feed_cover_url
+
     by_feed = []
     for f in feeds:
         ids = sub_map[f.id]
         by_feed.append(FeedStatRow(
             feed_id=f.id,
             title=f.title or f.url,
-            image_url=f.custom_image_url or f.image_url,
+            # This server's cover endpoint, never the feed's RSS artwork URL.
+            # The stats page lists every feed at once, so serving raw URLs here
+            # meant opening it announced the user to one host per podcast they
+            # subscribe to. Resolved through the shared helper so feeds with no
+            # cover yield nothing rather than a URL that 404s.
+            image_url=feed_cover_url(f, db),
             episode_count=sum(total_by.get(i, 0) for i in ids),
             downloaded_count=sum(dl_by.get(i, 0) for i in ids),
             unplayed_count=sum(unplayed_by.get(i, 0) for i in ids),
