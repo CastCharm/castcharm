@@ -217,6 +217,8 @@ def _feed_out(feed: Feed, db: Session, counts: dict | None = None) -> FeedOut:
         counts = _merge_counts(feed.id, sub_ids, raw)
 
     data = FeedOut.model_validate(feed)
+    from app.routers.player import effective_play_order
+    data.play_order = effective_play_order(feed, db)
     data.episode_count            = counts["episode_count"]
     data.downloaded_count         = counts["downloaded_count"]
     data.available_count          = counts["available_count"]
@@ -483,7 +485,14 @@ def get_feed(feed_id: int, db: Session = Depends(get_db)):
     feed = db.query(Feed).filter(Feed.id == feed_id).first()
     if not feed:
         raise HTTPException(status_code=404, detail="Feed not found")
-    return _feed_out(feed, db)
+    out = _feed_out(feed, db)
+    if out.play_order == "oldest":
+        from app.routers.player import next_up_for_feed
+        try:
+            out.next_up = next_up_for_feed(feed.id, db)
+        except Exception:
+            out.next_up = None
+    return out
 
 
 @router.put("/{feed_id}", response_model=FeedOut)

@@ -18,6 +18,7 @@ def _episode_out(ep: Episode, db: Session) -> EpisodeOut:
     feed = db.get(Feed, ep.feed_id)
     d = EpisodeOut.model_validate(ep)
     d.feed_title = feed.title if feed else None
+    d.feed_play_order = (feed.play_order or "newest") if feed else None
     # Artwork always resolves to this server, never to the podcast host — the
     # same rule the episodes and feeds routers follow. This one served RSS URLs
     # straight from the feed record, so a playlist was one more page quietly
@@ -35,17 +36,21 @@ def _episode_out(ep: Episode, db: Session) -> EpisodeOut:
 
 
 def _feed_queue(feed_id: int, filter_: str, db: Session) -> list[Episode]:
+    """Playable episodes of a podcast (primary + supplementary feeds), oldest
+    first using the same ordering as episode numbering."""
+    from app.routers.episodes import episode_order_key
+    from app.utils import get_group_feed_ids
     q = (
         db.query(Episode)
         .filter(
-            Episode.feed_id == feed_id,
+            Episode.feed_id.in_(get_group_feed_ids(db, feed_id)),
             Episode.hidden.is_(False),
             Episode.status == "downloaded",
         )
     )
     if filter_ == "unplayed":
         q = q.filter(Episode.played.is_(False))
-    return q.order_by(Episode.published_at.asc()).all()
+    return q.order_by(*episode_order_key()).all()
 
 
 def _playlist_queue(playlist_id: int, db: Session) -> list[Episode]:

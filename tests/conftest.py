@@ -81,3 +81,30 @@ def make_mp3(path, *, title=None, tracknumber=None, date=None, artist=None, fram
 
 
 D = datetime
+
+
+@pytest.fixture()
+def client(tmp_path, monkeypatch):
+    """The real FastAPI app on a throwaway database.
+
+    The engine is created at import time from DATABASE_URL, so instead of
+    reloading modules (which would split Base from the models) we swap the
+    engine and session factory wherever they were imported."""
+    from sqlalchemy import create_engine, event
+    from sqlalchemy.orm import sessionmaker
+    import app.database as adb
+    import app.main
+    import app.startup_scan
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'app.db'}", connect_args={"check_same_thread": False})
+    event.listen(engine, "connect", adb.set_sqlite_pragma)
+    Session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    monkeypatch.setattr(adb, "engine", engine)
+    monkeypatch.setattr(adb, "SessionLocal", Session)
+    monkeypatch.setattr(app.main, "SessionLocal", Session)
+    monkeypatch.setattr(app.startup_scan, "SessionLocal", Session)
+
+    from fastapi.testclient import TestClient
+    with TestClient(app.main.app) as c:
+        yield c
+    engine.dispose()

@@ -386,6 +386,10 @@ def sync_feed_episodes(
             getattr(raw, "itunes_author", None),
         )
         feed.language = feed.language or getattr(raw, "language", None)
+        # A serial (itunes:type=serial) is meant to be heard in order.  Only
+        # ever fill an unset preference; the user's own choice stays put.
+        if feed.play_order is None and str(getattr(raw, "itunes_type", "") or "").strip().lower() == "serial":
+            feed.play_order = "oldest"
     else:
         # Still populate completely empty feeds (e.g. first-time restore with no live sync yet)
         raw_image = _feed_image_url(raw)

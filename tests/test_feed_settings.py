@@ -1,35 +1,6 @@
 """Feed settings over HTTP: the ID3 toggle must save, and the contract the
 client has to respect (tag map values are strings) is spelled out by a 422."""
-import os
-
 import pytest
-
-
-@pytest.fixture()
-def client(tmp_path, monkeypatch):
-    """The real FastAPI app on a throwaway database.
-
-    The engine is created at import time from DATABASE_URL, so instead of
-    reloading modules (which would split Base from the models) we swap the
-    engine and session factory wherever they were imported."""
-    from sqlalchemy import create_engine, event
-    from sqlalchemy.orm import sessionmaker
-    import app.database as adb
-    import app.main
-    import app.startup_scan
-
-    engine = create_engine(f"sqlite:///{tmp_path / 'app.db'}", connect_args={"check_same_thread": False})
-    event.listen(engine, "connect", adb.set_sqlite_pragma)
-    Session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    monkeypatch.setattr(adb, "engine", engine)
-    monkeypatch.setattr(adb, "SessionLocal", Session)
-    monkeypatch.setattr(app.main, "SessionLocal", Session)
-    monkeypatch.setattr(app.startup_scan, "SessionLocal", Session)
-
-    from fastapi.testclient import TestClient
-    with TestClient(app.main.app) as c:
-        yield c
-    engine.dispose()
 
 
 def _make_feed(client):
@@ -62,3 +33,16 @@ def test_boolean_in_mapping_is_rejected_with_a_named_field(client):
     assert r.status_code == 422
     loc = r.json()["detail"][0]["loc"]
     assert "id3_field_mapping" in loc and "enabled" in loc
+
+
+def test_limits_endpoint_matches_constants(client):
+    from app import limits
+    body = client.get("/api/limits").json()
+    assert body == {
+        "max_page_size": limits.MAX_PAGE_SIZE,
+        "max_ids_in_url": limits.MAX_IDS_IN_URL,
+        "max_bulk_ids": limits.MAX_BULK_IDS,
+        "max_index_ids": limits.MAX_INDEX_IDS,
+        "max_search_len": limits.MAX_SEARCH_LEN,
+        "max_request_bytes": limits.MAX_REQUEST_BYTES,
+    }

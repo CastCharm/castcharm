@@ -36,6 +36,10 @@ class GlobalSettings(Base):
     theme = Column(String, default="midnight")
     # Dashboard panels
     show_suggested_listening = Column(Boolean, default=True)
+    # Listening order new podcasts start with: 'newest' (latest episode first)
+    # or 'oldest' (chronological, like a story). A feed with play_order NULL
+    # inherits this; a feed the user set explicitly keeps its own value.
+    default_play_order = Column(String, default="oldest")
     # First-run setup wizard
     setup_complete = Column(Boolean, default=False)
     # Authentication
@@ -153,6 +157,13 @@ class Feed(Base):
     autoclean_mode = Column(String, nullable=True)  # "recent" | "unplayed"; None = inherit global
     # When True, this feed is skipped by the global scheduled autoclean job
     autoclean_exclude = Column(Boolean, default=False, nullable=True)
+
+    # How "Play" treats this feed.  None/'newest' = start with the newest
+    # unplayed episode (ordinary podcast).  'oldest' = listen in order: resume
+    # where you left off, else the oldest unplayed, then keep going (a story
+    # or serial).  Sync fills in 'oldest' from itunes:type=serial only while
+    # this is still NULL, so a user's choice is never overridden.
+    play_order = Column(String, nullable=True)
 
     # Status
     active = Column(Boolean, default=True)

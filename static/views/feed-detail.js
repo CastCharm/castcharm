@@ -24,7 +24,9 @@ function _parseDurSecs(dur) {
 // ============================================================
 // Global playback helpers (used by dashboard, feed-detail, etc.)
 // ============================================================
-window.playEpisode = async function (epId, rewindOnResume = false) {
+// opts.contextSet: the caller already told the server what to play next
+// (Play Feed / playlist / auto-advance), so don't re-point the queue here.
+window.playEpisode = async function (epId, rewindOnResume = false, opts = {}) {
   if (Player.currentId() === epId) {
     Player.togglePause();
     return;
@@ -33,12 +35,18 @@ window.playEpisode = async function (epId, rewindOnResume = false) {
     let ep = await API.getEpisode(epId);
     // If the episode was already fully played, restart from the beginning
     if (ep.played) {
-      const [reset] = await Promise.all([
+      await Promise.all([
         API.updateProgress(epId, 0),
-        API.togglePlayed(epId),   // sets played → false
+        API.setPlayed(epId, false),
       ]);
       ep = await API.getEpisode(epId);
       if (typeof updateEpisodeRow === "function") updateEpisodeRow(ep);
+    }
+    // A feed that is listened to in order keeps going after this episode,
+    // wherever the tap came from (feed page, Continue Listening, search).
+    if (!opts.contextSet && ep.feed_play_order === "oldest") {
+      API.playerPlay({ context_type: "feed", context_id: ep.feed_id,
+                       context_filter: "unplayed", episode_id: ep.id }).catch(() => {});
     }
     const pos = ep.play_position_seconds || 0;
     Player.play({
@@ -68,7 +76,7 @@ window._autoPlayNext = async function (currentEpId) {
   try {
     const state = await API.playerNext();
     if (state.current_episode && state.current_episode.status === "downloaded") {
-      window.playEpisode(state.current_episode.id);
+      window.playEpisode(state.current_episode.id, false, { contextSet: true });
       return;
     }
   } catch (_) {
@@ -81,7 +89,7 @@ window._autoPlayNext = async function (currentEpId) {
     if (currentIdx === -1) return;
     for (let i = currentIdx + 1; i < eps.length; i++) {
       if (eps[i].status === "downloaded" && !eps[i].played) {
-        window.playEpisode(eps[i].id);
+        window.playEpisode(eps[i].id, false, { contextSet: true });
         return;
       }
     }
@@ -230,6 +238,49 @@ async function _refreshEpisodeList() {
 }
 
 // Refresh just the feed header stats + last-checked text
+// "Play latest" for an ordinary feed; "Continue" (or "All caught up") for a
+// feed listened to in order.  The sub-line says what Continue would play.
+function _playFeedLabel(feed) {
+  if ((feed.play_order || "oldest") !== "oldest") return "Play latest";
+  return feed.next_up ? "Continue" : "All caught up";
+}
+
+function _nextUpText(feed) {
+  const nu = feed.next_up;
+  if ((feed.play_order || "oldest") !== "oldest" || !nu) return "";
+  const parts = [];
+  if (nu.seq_number != null) parts.push(`Ep. ${nu.seq_number}`);
+  if (nu.title) parts.push(escHTML(nu.title));
+  if (nu.resume && nu.position_seconds >= 60) parts.push(`${Math.round(nu.position_seconds / 60)} min in`);
+  return parts.join(" \u00B7 ");
+}
+
+async function _refreshNextUp() {
+  const { id, feed } = window._epState || {};
+  if (!id || (feed?.play_order || "oldest") !== "oldest") return;
+  try {
+    const updated = await API.getFeed(id);
+    window._epState.feed = updated;
+    _paintNextUp(updated);
+  } catch (_) {}
+}
+
+// Anything that changes which episode "Play" would start — a download
+// landing, an episode marked played or hidden, settings saved — repaints the
+// Play button. Debounced because a batch action touches many rows at once.
+let _nextUpRepaintTimer = null;
+function _scheduleNextUpRepaint() {
+  clearTimeout(_nextUpRepaintTimer);
+  _nextUpRepaintTimer = setTimeout(() => { _refreshFeedStats().catch(() => {}); }, 1200);
+}
+
+function _paintNextUp(feed) {
+  const label = document.getElementById("btn-play-feed-label");
+  const line  = document.getElementById("feed-next-up");
+  if (label) label.textContent = _playFeedLabel(feed);
+  if (line)  line.innerHTML = _nextUpText(feed);
+}
+
 async function _refreshFeedStats() {
   const { id } = window._epState || {};
   if (!id) return;
@@ -250,6 +301,7 @@ async function _refreshFeedStats() {
       : "Never checked";
   }
   _renderFeedErrorBanner(updated);
+  _paintNextUp(updated);
   window._feedDetailDL?.refresh();
   return updated;
 }
@@ -652,8 +704,9 @@ async function viewFeedDetail(feedId) {
           <div class="feed-header-actions">
             <button class="btn btn-primary btn-sm" id="btn-play-feed">
               ${svg('<polygon points="5 3 19 12 5 21 5 3"/>')}
-              Play Feed
+              <span id="btn-play-feed-label">${_playFeedLabel(feed)}</span>
             </button>
+            <span id="feed-next-up" class="feed-next-up">${_nextUpText(feed)}</span>
             <button class="btn btn-primary btn-sm" id="btn-sync-feed">
               ${svg('<polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>')}
               Sync Feed
@@ -759,6 +812,9 @@ async function viewFeedDetail(feedId) {
             ${toggle("Auto-download new episodes", "auto_download_new",
               feed.auto_download_new !== null ? feed.auto_download_new : settings.auto_download_new,
               "Automatically queue new episodes when first detected. Overrides global setting.")}
+
+            ${toggle("Listen in chronological order", "play_order_oldest", feed.play_order === "oldest",
+              "For stories and serials. Play resumes where you left off, or starts at the oldest episode you haven't heard, and continues in order. Off: Play starts with the newest episode.")}
 
             <div class="form-group">
               <label class="form-label">Auto-cleanup</label>
@@ -1041,12 +1097,16 @@ async function viewFeedDetail(feedId) {
     try {
       const state = await API.playerPlay({ context_type: "feed", context_id: id, context_filter: "unplayed" });
       if (state.current_episode) {
-        window.playEpisode(state.current_episode.id);
+        window.playEpisode(state.current_episode.id, false, { contextSet: true });
       } else {
         Toast.info("No unplayed downloaded episodes to play");
       }
     } catch (e) { Toast.error(e.message); }
   });
+
+  // Keep "Continue · Ep. 12 · Title · 14 min in" honest while the player runs.
+  window._onPlayerEpisodeStarted = () => { _refreshNextUp(); };
+  window._onPlayerEpisodeStopped = () => { _refreshNextUp(); };
 
   document.getElementById("btn-sync-feed").addEventListener("click", async () => {
     try {
@@ -1679,6 +1739,7 @@ async function viewFeedDetail(feedId) {
       organize_by_year: raw.organize_by_year ?? false,
       save_xml: raw.save_xml ?? false,
       auto_download_new: raw.auto_download_new ?? true,
+      play_order: raw.play_order_oldest ? "oldest" : "newest",
       episode_number_start: raw.episode_number_start ? Number(raw.episode_number_start) : 1,
     };
     if (raw.download_path) payload.download_path = raw.download_path;
@@ -1712,6 +1773,8 @@ async function viewFeedDetail(feedId) {
         const hdr = document.querySelector(".feed-header-title");
         if (hdr) hdr.textContent = updated.title || updated.url;
       }
+      // The Play button's label and "next up" line depend on these settings.
+      _refreshFeedStats();
     } catch (err) {
       Toast.error(err.message);
     }
@@ -3395,7 +3458,12 @@ function updateEpisodeRow(ep) {
   // played/hidden/artwork update to an episode that happened to be scrolled
   // away was simply lost until the next full refetch.
   const wasHidden = !!_epGet(ep.id)?.hidden;
+  const before = _epGet(ep.id);
   _epUpsert(ep);
+  if (window._epState?.id === ep.feed_id &&
+      (!before || before.played !== ep.played || before.status !== ep.status || before.hidden !== ep.hidden)) {
+    _scheduleNextUpRepaint();
+  }
 
   const vlist = window._epState?.vlist;
   const row = document.getElementById(`ep-${ep.id}`);

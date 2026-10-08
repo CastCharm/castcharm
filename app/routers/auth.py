@@ -147,6 +147,7 @@ class SetupCompleteRequest(BaseModel):
     save_xml: Optional[bool] = None
     timezone: Optional[str] = None
     api_enabled: Optional[bool] = None
+    default_play_order: Optional[str] = None   # 'newest' | 'oldest'
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -467,6 +468,8 @@ def complete_setup(
         gs.timezone = body.timezone
     if body.api_enabled is not None:
         gs.api_enabled = body.api_enabled
+    if body.default_play_order in ("newest", "oldest"):
+        gs.default_play_order = body.default_play_order
 
     gs.setup_complete = True
     db.commit()
