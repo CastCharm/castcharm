@@ -324,6 +324,44 @@ def _local_pub_date(dt, tz_name: str):
         return dt
 
 
+def build_filename_stem(
+    episode: Episode,
+    date_prefix: bool,
+    episode_number_prefix: bool,
+    total_episodes: int = 0,
+    timezone: str = "UTC",
+) -> str:
+    """Pure name builder: ``YYYY-MM-DD - ### - title`` with each present part
+    joined by " - ".  No filesystem access, no collision handling — used by the
+    importer's dry-run preview as well as by _build_file_path below."""
+    import math
+    episode_title = sanitize_filename(episode.title or "Untitled Episode")
+    parts = []
+    if date_prefix and episode.published_at:
+        pub = _local_pub_date(episode.published_at, timezone)
+        parts.append(pub.strftime("%Y-%m-%d"))
+    if episode_number_prefix and episode.seq_number is not None:
+        pad = max(3, math.ceil(math.log10(total_episodes + 1))) if total_episodes > 0 else 3
+        parts.append(str(episode.seq_number).zfill(pad))
+    parts.append(episode_title)
+    return " - ".join(parts)
+
+
+def build_expected_basename(
+    episode: Episode,
+    date_prefix: bool,
+    episode_number_prefix: bool,
+    content_type: Optional[str],
+    url: str,
+    total_episodes: int = 0,
+    timezone: str = "UTC",
+) -> str:
+    """Expected final filename (basename only) for *episode*.  Pure — safe to
+    call from a preview that must not touch the filesystem."""
+    return build_filename_stem(episode, date_prefix, episode_number_prefix,
+                               total_episodes, timezone) + _guess_extension(content_type, url)
+
+
 def _build_file_path(
     episode: Episode,
     folder_name: str,
@@ -336,21 +374,13 @@ def _build_file_path(
     total_episodes: int = 0,
     timezone: str = "UTC",
 ) -> str:
-    """Construct the target file path for an episode download."""
-    import math
-    episode_title = sanitize_filename(episode.title or "Untitled Episode")
+    """Construct the target file path for an episode download.
 
-    # Build filename: YYYY-MM-DD - ### - title  (each present part joined by " - ")
-    parts = []
-    if date_prefix and episode.published_at:
-        pub = _local_pub_date(episode.published_at, timezone)
-        parts.append(pub.strftime("%Y-%m-%d"))
-    if episode_number_prefix and episode.seq_number is not None:
-        pad = max(3, math.ceil(math.log10(total_episodes + 1))) if total_episodes > 0 else 3
-        parts.append(str(episode.seq_number).zfill(pad))
-    parts.append(episode_title)
-
-    filename_stem = " - ".join(parts)
+    Creates the directory and resolves name collisions, so this is only for a
+    real download/copy.  Previews use build_expected_basename instead.
+    """
+    filename_stem = build_filename_stem(episode, date_prefix, episode_number_prefix,
+                                        total_episodes, timezone)
     ext = _guess_extension(content_type, url)
     filename = filename_stem + ext
 

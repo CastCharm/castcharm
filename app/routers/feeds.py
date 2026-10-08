@@ -542,7 +542,9 @@ def get_feed_episodes(
         q = q.filter(Episode.hidden.is_(False))
 
     if order == "asc":
-        q = q.order_by(Episode.published_at.asc().nullsfirst(), Episode.id.asc())
+        # Same key numbering uses, so "oldest first" here and "#1" agree.
+        from app.routers.episodes import episode_order_key
+        q = q.order_by(*episode_order_key())
     else:
         q = q.order_by(Episode.published_at.desc().nullslast(), Episode.id.desc())
     episodes = q.offset(offset).limit(limit).all()
@@ -989,7 +991,8 @@ def import_stage(
     to_process_count = sum(1 for i in items if not i.get("skip", False))
     _import_jobs[feed_id] = {
         "status": "running", "total": to_process_count, "processed": 0,
-        "matched": 0, "created": 0, "renamed": 0, "errors": 0, "message": "Starting…",
+        "matched": 0, "created": 0, "renamed": 0, "errors": 0, "file_errors": [],
+        "message": "Starting…",
     }
 
     fn_fmt = body.filename_format

@@ -417,8 +417,15 @@ class ImportStageItem(BaseModel):
     path: str
     episode_id: Optional[int] = None  # None → create new episode
     skip: bool = False
-    title: Optional[str] = None        # override detected title
-    date: Optional[str] = None         # override date (YYYY-MM-DD)
+    # Only the fields the user actually edited in the review table:
+    # {title, date (YYYY-MM-DD), date_is_approximate, episode_number, season_number}.
+    # These are the only values that ever replace RSS metadata on an existing
+    # episode; a user-entered episode_number also pins the sequence number.
+    overrides: Optional[dict] = None
+    # Legacy hint fields (older clients).  Ignored for existing episodes and
+    # only used when creating a new one and they differ from what was parsed.
+    title: Optional[str] = None
+    date: Optional[str] = None
     episode_number: Optional[int] = None
     season_number: Optional[int] = None
 

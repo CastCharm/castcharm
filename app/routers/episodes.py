@@ -17,11 +17,55 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/episodes", tags=["episodes"])
 
 
+def _lnds_indices(values: list[int]) -> set[int]:
+    """Indices of one longest non-decreasing subsequence of *values*.
+
+    Used to decide which episode_number values are "in sequence" and may be
+    honoured for gap preservation.  O(n log n) patience sort.
+    """
+    import bisect
+    if not values:
+        return set()
+    tails: list[int] = []          # tails[k] = smallest tail value of a run of length k+1
+    tails_idx: list[int] = []      # index into values of that tail
+    prev = [-1] * len(values)
+    for i, v in enumerate(values):
+        k = bisect.bisect_right(tails, v)
+        if k == len(tails):
+            tails.append(v)
+            tails_idx.append(i)
+        else:
+            tails[k] = v
+            tails_idx[k] = i
+        prev[i] = tails_idx[k - 1] if k > 0 else -1
+    out: set[int] = set()
+    i = tails_idx[-1]
+    while i != -1:
+        out.add(i)
+        i = prev[i]
+    return out
+
+
+def episode_order_key():
+    """The one ordering that means "oldest first" everywhere numbering happens:
+    published date, then the feed's own episode number, then insertion order.
+    Undated episodes sort last."""
+    return (
+        Episode.published_at.asc().nullslast(),
+        Episode.episode_number.asc().nullslast(),
+        Episode.id.asc(),
+    )
+
+
 def recalc_seq_numbers(primary_feed_id: int, db: Session) -> None:
     """Reassign sequential episode numbers across all non-hidden episodes in a podcast group.
 
     Oldest episode = episode_number_start, then +1 for each successive episode.
-    Locked episodes keep their manually-set seq_number and are skipped.
+    Locked episodes keep their manually-set seq_number; nobody else may reuse
+    that value.  Episodes whose own episode_number sits on the longest
+    non-decreasing run of numbers keep that number (gaps preserved); numbers
+    that fall outside the run — a stray ID3 track number, a year mistaken for
+    an episode — are ignored and the episode is numbered positionally.
     Any episode whose seq_number changes while it has a downloaded file is
     flagged with filename_outdated = True.
     """
@@ -30,32 +74,37 @@ def recalc_seq_numbers(primary_feed_id: int, db: Session) -> None:
 
     all_feed_ids = get_group_feed_ids(db, primary_feed_id)
 
-    # Fetch all non-hidden episodes ordered oldest-first
     visible = (
         db.query(Episode)
         .filter(Episode.feed_id.in_(all_feed_ids), Episode.hidden.is_(False))
-        .order_by(Episode.published_at.asc().nullslast(), Episode.id.asc())
+        .order_by(*episode_order_key())
         .all()
     )
 
-    # Only use episode_number for gap preservation when it forms a globally
-    # monotonically non-decreasing sequence.  If numbers reset (e.g. a podcast
-    # restarts at ep 1 for a new season), treat episode_number as unreliable for
-    # seq purposes and fall back to purely positional numbering.
-    ep_nums_in_order = [ep.episode_number for ep in visible if ep.episode_number is not None]
-    use_ep_num_for_gaps = bool(ep_nums_in_order) and ep_nums_in_order == sorted(ep_nums_in_order)
+    # Which episode_number values are trustworthy for gap preservation?
+    # Implausibly large values (a 4-digit year, an enclosure size) never are.
+    n_visible = len(visible)
+    plausible_max = max(1000, n_visible * 3)
+    numbered = [(i, ep.episode_number) for i, ep in enumerate(visible)
+                if ep.episode_number is not None and 0 < ep.episode_number <= plausible_max]
+    in_seq = _lnds_indices([n for _, n in numbered])
+    honour: set[int] = {numbered[k][0] for k in in_seq}
+
+    # Numbers pinned by locks may not be handed out to anyone else.
+    used: set[int] = {ep.seq_number for ep in visible if ep.seq_number_locked and ep.seq_number is not None}
 
     counter = start
-    for ep in visible:
+    for i, ep in enumerate(visible):
         if ep.seq_number_locked:
-            # Manual override: do not touch seq_number, but advance counter past it
             counter = max(counter, (ep.seq_number or 0) + 1)
             continue
-        if use_ep_num_for_gaps and ep.episode_number is not None:
-            # Honour the episode's own number and preserve any gap before it.
+        if i in honour:
             new_num = max(counter, ep.episode_number)
         else:
             new_num = counter
+        while new_num in used:
+            new_num += 1
+        used.add(new_num)
         counter = new_num + 1
         if ep.seq_number != new_num:
             ep.seq_number = new_num

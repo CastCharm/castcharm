@@ -1,0 +1,353 @@
+# =============================================================================
+# CastCharm — Homepage (gethomepage.dev) custom API widget
+# =============================================================================
+#
+# Paste one of the blocks below into your Homepage `services.yaml`.
+# Reference: https://gethomepage.dev/widgets/services/customapi/
+#
+# CastCharm has no first-party Homepage widget, so this uses the generic
+# `customapi` widget pointed at CastCharm's `GET /api/status` endpoint. That one
+# endpoint returns the entire dashboard summary — library counts, download queue,
+# storage, scheduler state — as flat JSON, so everything below is a matter of
+# picking which of those fields you want on the tile.
+#
+# -----------------------------------------------------------------------------
+# BEFORE YOU START — three things, and the third one bites
+# -----------------------------------------------------------------------------
+#
+# 1. Enable the external API.
+#      CastCharm → Settings → Security → "Enable external API".
+#      This is the master kill switch. With it off, every API key is refused.
+#
+# 2. Create an API key.
+#      Same settings page → "Generate new key". The plaintext key (it starts
+#      with `cc_`) is shown ONCE, at creation. Copy it then; only its hash is
+#      stored, so it cannot be shown again. Give the key a name you will
+#      recognise later — "homepage" — because revoking is per-key and you want to
+#      be able to kill this one without logging your phone out.
+#
+# 3. *** /api/status does not return 401 when unauthenticated. ***
+#      It returns HTTP 200 with every count zeroed. This is deliberate: the login
+#      screen and the setup wizard both poll it before anyone has authenticated,
+#      and an unauthenticated caller should not be able to fingerprint how large
+#      your library is.
+#
+#      The consequence for you: a widget with a missing, mistyped, or revoked key
+#      does not show an error. It shows a tidy, plausible, permanently-zero tile.
+#      If every number reads 0, suspect the key first, not the server.
+#
+#      (Exception: if your CastCharm instance has no password configured at all,
+#      no auth is required and the real numbers come back without a key. Adding
+#      the header anyway costs nothing and means the widget keeps working if you
+#      later set a password.)
+#
+# -----------------------------------------------------------------------------
+# NETWORKING
+# -----------------------------------------------------------------------------
+#
+# Homepage fetches this server-side, from inside its own container — the browser
+# never calls CastCharm directly. Two things follow:
+#
+#   * `url` must resolve from the Homepage container. `localhost` means the
+#     Homepage container itself, not your host. Use the Docker service name
+#     (http://castcharm:8000) if they share a network, otherwise the host's LAN
+#     address.
+#   * CORS is irrelevant here, which is why CastCharm ships without it. Requests
+#     from a browser extension or a separate web frontend would be a different
+#     story.
+#
+# Your API key is sent from Homepage to CastCharm over whatever `url` you set.
+# On plain http:// that key crosses the wire in the clear, which is fine inside a
+# host or a private LAN and not fine across the open internet.
+#
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# 1. THE ONE TO START WITH — library at a glance
+# -----------------------------------------------------------------------------
+# Four fields is the sweet spot for Homepage's default `block` display: they lay
+# out in a single even row. A fifth wraps and the tile gets tall.
+
+- Media:
+    - CastCharm:
+        icon: mdi-podcast                     # see "ICONS" at the bottom
+        href: http://castcharm.lan:8000       # where clicking the tile goes
+        description: Podcast archiver
+        siteMonitor: http://castcharm.lan:8000  # up/down dot, independent of the widget
+        widget:
+          type: customapi
+          url: http://castcharm.lan:8000/api/status
+          refreshInterval: 30000              # 30s. See "REFRESH RATE" below.
+          headers:
+            X-API-Key: cc_your_key_here       # or: Authorization: Bearer cc_...
+          mappings:
+            - field: podcasts_total
+              label: Podcasts
+              format: number
+            - field: episodes_total
+              label: Episodes
+              format: number
+            - field: episodes_downloaded
+              label: Downloaded
+              format: number
+            - field: storage_bytes
+              label: Storage
+              format: bytes                   # 41231237120 -> "38.4 GB"
+
+
+# -----------------------------------------------------------------------------
+# 2. ACTIVITY — what the server is doing right now
+# -----------------------------------------------------------------------------
+# Point this one at the queue rather than the library if what you actually want
+# from the dashboard is "is it working, and is anything stuck".
+#
+# `episodes_failed` is the field worth having on screen: nothing else surfaces a
+# feed that has quietly stopped downloading.
+
+- Media:
+    - CastCharm Activity:
+        icon: mdi-download
+        href: http://castcharm.lan:8000
+        widget:
+          type: customapi
+          url: http://castcharm.lan:8000/api/status
+          refreshInterval: 15000              # faster, because these numbers move
+          headers:
+            X-API-Key: cc_your_key_here
+          mappings:
+            - field: active_downloads
+              label: Downloading
+              format: number
+            - field: download_queue_size
+              label: Queued
+              format: number
+            - field: episodes_failed
+              label: Failed
+              format: number
+            - field: next_sync_at
+              label: Next sync
+              format: relativeDate            # "in 47 minutes"
+              # Renders blank when the field is null, which happens whenever the
+              # scheduler is stopped. Homepage has no fallback-value option, so if
+              # a blank cell would puzzle you, put `scheduler_running` on the tile
+              # (widget 3 below) — that's the field that explains the gap.
+
+
+# -----------------------------------------------------------------------------
+# 3. HEALTH — booleans turned into words
+# -----------------------------------------------------------------------------
+# `remap` is how you turn a raw JSON boolean into something readable. Without it
+# the tile literally prints "true".
+#
+# The `any: true` entry is the catch-all and must come last.
+
+- Media:
+    - CastCharm Health:
+        icon: mdi-heart-pulse
+        widget:
+          type: customapi
+          url: http://castcharm.lan:8000/api/status
+          refreshInterval: 60000
+          headers:
+            X-API-Key: cc_your_key_here
+          mappings:
+            - field: scheduler_running
+              label: Scheduler
+              remap:
+                - value: true
+                  to: Running
+                - any: true
+                  to: STOPPED
+            - field: download_window_paused
+              label: Window
+              remap:
+                - value: true
+                  to: Paused
+                - any: true
+                  to: Open
+            - field: syncing_count
+              label: Syncing
+              format: number
+            - field: version
+              label: Version
+              format: text
+          # If a boolean remap stubbornly refuses to match, quote it — `value: "true"`.
+          # YAML parses bare true as a boolean and Homepage compares strictly, so a
+          # quoted/unquoted mismatch silently falls through to the `any` branch.
+
+
+# -----------------------------------------------------------------------------
+# 4. LIST DISPLAY — label left, value right, one per line
+# -----------------------------------------------------------------------------
+# `display: list` stacks vertically instead of laying out in a row, which reads
+# better past four fields and lets you hang a second value off each row with
+# `additionalField`. Costs vertical space; worth it on a wide column.
+
+- Media:
+    - CastCharm:
+        icon: mdi-podcast
+        widget:
+          type: customapi
+          url: http://castcharm.lan:8000/api/status
+          refreshInterval: 30000
+          display: list
+          headers:
+            X-API-Key: cc_your_key_here
+          mappings:
+            - field: episodes_downloaded
+              label: Downloaded
+              format: number
+              additionalField:
+                field: episodes_total         # right-hand secondary value
+                format: number
+                color: theme                  # theme | adaptive | black | white
+                                              # adaptive = green if positive,
+                                              # red if negative
+            - field: storage_bytes
+              label: Storage
+              format: bytes
+            - field: download_queue_size
+              label: Queue
+              format: number
+
+
+# =============================================================================
+# EVERY FIELD /api/status RETURNS
+# =============================================================================
+# Swap any of these into `mappings` above. The `format:` shown is the one that
+# makes each field render sensibly — get it wrong and you'll see a raw integer
+# where you wanted "38.4 GB", or an ISO timestamp where you wanted "in 2 hours".
+#
+# --- Library size ---
+#   podcasts_total         number   Primary feeds only. Supplementary feeds roll
+#                                   up into their primary, so this is the number
+#                                   of shows you'd say you subscribe to.
+#   feeds_total            number   Every feed row including supplementary ones.
+#                                   Higher than podcasts_total if you use feed
+#                                   groups; identical if you don't.
+#   episodes_total         number   All known episodes, downloaded or not.
+#   episodes_downloaded    number   Episodes with a file on the server's disk.
+#   storage_bytes          bytes    Summed file size of downloaded episodes.
+#
+# --- Download pipeline ---
+#   active_downloads       number   Downloading right now.
+#   download_queue_size    number   Queued, waiting for a slot or for the window.
+#   episodes_failed        number   Exhausted their retries. The one to alert on.
+#   downloading_feed_ids   (array)  Feed IDs with queued/active work. Not useful
+#                                   as a scalar — see "ARRAYS" below.
+#
+# --- Scheduler & background jobs ---
+#   scheduler_running      bool     False means nothing is being fetched at all.
+#   next_sync_at           relativeDate  Next scheduled feed sync. null if the
+#                                   scheduler is stopped — pair with defaultValue.
+#   syncing_count          number   Feeds mid-sync.
+#   syncing_feed_ids       (array)  Which ones. See "ARRAYS".
+#   importing_count        number   Active file-import jobs.
+#   scanning               bool     Startup folder scan in progress.
+#   xml_regenerating       bool     complete-feed.xml rebuild in progress.
+#   opml_generating        bool     OPML export in progress.
+#   autoclean_running      bool     Auto-cleanup job in progress.
+#
+# --- Download window ---
+#   download_window_paused      bool          True = downloads are deliberately
+#                                             held because you're outside the
+#                                             configured window. Not an error.
+#   download_window_next_open   relativeDate  When the window next opens. null
+#                                             if the window is disabled.
+#
+# --- Misc ---
+#   version                text     CastCharm version string.
+#
+#
+# ARRAYS
+# ------
+# `downloading_feed_ids` and `syncing_feed_ids` are arrays of integers. Homepage
+# addresses array members by index with dot notation:
+#
+#   - field: syncing_feed_ids.0
+#     label: First syncing feed
+#
+# That is rarely what you want, since the array is unordered and usually empty.
+# The counts (`syncing_count`, `active_downloads`) are the useful form. If you
+# genuinely want the list rendered, `display: dynamic-list` iterates an array —
+# but these arrays hold bare integers with no names attached, so you'd get a
+# column of feed IDs. Not worth it.
+#
+#
+# FORMAT VALUES
+# -------------
+# Homepage supports: text, number, float, percent, duration, bytes, bitrate,
+# size, date, relativeDate.
+#
+# Also available per-mapping:
+#   prefix: / suffix:     literal text either side of the value
+#   scale: 0.001          multiply before display (number, or a string like 1/16)
+#   remap:                value substitution (see widget 3)
+#   additionalField:      second value on the right, `display: list` only
+#
+# There is no fallback-value option. A null field renders blank, and `remap`'s
+# `any: true` catch-all can't stand in for one — it matches every unmatched
+# value, not just null, so it would clobber the real values too.
+#
+#
+# REFRESH RATE
+# ------------
+# Homepage defaults to 10s (10000). /api/status is a handful of COUNT queries
+# against SQLite, so it is cheap, but there is no reason to hammer it — the
+# library-size numbers change a few times a day. 30000 is a good default;
+# 15000 if you're watching a download queue drain; 60000 for a health tile.
+#
+# Note that Homepage polls per browser tab with the dashboard open. Leave the
+# dashboard up on a wall display and that interval runs all day.
+#
+#
+# A WORD ON /api/stats
+# --------------------
+# There is a second endpoint, GET /api/stats, carrying things /api/status does
+# not: total_unplayed_count, total_listen_seconds, per-feed breakdowns. Tempting.
+#
+# Don't poll it from a dashboard. It walks every episode row in the database and
+# builds per-feed aggregates, duration histograms and year buckets to produce a
+# payload the tile would use four numbers from. On a large library that is a
+# real query, and Homepage would re-run it on every refresh, forever.
+#
+# If you want `total_unplayed_count` badly enough, give it its own widget at
+# refreshInterval: 3600000 (hourly) and accept the staleness:
+#
+#     - field: total_unplayed_count
+#       label: Unplayed
+#       format: number
+#     - field: total_listen_seconds
+#       label: Listened
+#       format: duration
+#
+#
+# ICONS
+# -----
+# Homepage's icon set (dashboard-icons) has no CastCharm entry. Options:
+#   icon: mdi-podcast              Material Design Icons, built in. Recommended.
+#   icon: mdi-cast-audio           If you prefer the cast metaphor.
+#   icon: /icons/castcharm.png     Your own file, dropped in Homepage's
+#                                  public/icons/ directory. CastCharm's own
+#                                  launcher art is in the Android repo at
+#                                  app/src/main/res/drawable-nodpi/icon_no_bg.png
+#
+#
+# SECURITY NOTES
+# --------------
+# * CastCharm API keys are full-access. There is no read-only scope, so the key
+#   in this file can also delete every feed you have. Treat services.yaml as a
+#   secret — Homepage supports {{HOMEPAGE_VAR_*}} substitution from the
+#   environment if you'd rather not have it sitting in the file:
+#
+#       headers:
+#         X-API-Key: "{{HOMEPAGE_VAR_CASTCHARM_KEY}}"
+#
+# * Keys are stored as SHA-256 hashes. Revoking one in Settings → Security takes
+#   effect immediately; the widget then quietly reverts to all-zeros (see the
+#   warning at the top).
+#
+# * Turning the external API kill switch off disables every key at once,
+#   including this one, including the Android app's.
+# =============================================================================

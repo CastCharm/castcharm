@@ -2816,13 +2816,13 @@ function showImportFilesModal(feedId, feed) {
             importAllBtn.disabled = true;
             importAllBtn.textContent = "Importing\u2026";
             try {
+              // Parsed values are re-derived server-side; only user edits
+              // travel as overrides (none from this quick path).
               const items = actionFiles.map(f => ({
                 path: f.path,
-                skip: false,
+                skip: !!f.duplicate_of,
                 episode_id: f.match?.episode_id || null,
-                episode_number: f.episode_number ?? null,
-                title: f.title ?? null,
-                date: f.date ?? null,
+                overrides: {},
               }));
               await API.commitImport(feedId, items, _filenameFormat || null);
               Modal.close();
@@ -2939,7 +2939,7 @@ function showImportFilesModal(feedId, feed) {
         </td>
         <td style="padding:7px 10px;text-align:center;white-space:nowrap">
           <label style="cursor:pointer;display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--text-2)">
-            <input type="checkbox" class="import-skip-chk" data-row="${i}" style="width:14px;height:14px" />
+            <input type="checkbox" class="import-skip-chk" data-row="${i}" style="width:14px;height:14px" ${f.duplicate_of ? "checked" : ""} />
             Skip
           </label>
         </td>
@@ -3101,14 +3101,13 @@ function showImportFilesModal(feedId, feed) {
           body.querySelectorAll("#import-tbody tr").forEach((row, i) => {
             if (row.querySelector(".import-skip-chk")?.checked) return;
             const epIdVal = row.querySelector(".import-ep-select")?.value || "";
-            const f = sortedFiles[i];
             items.push({
-              path:           row.dataset.path,
-              skip:           false,
-              episode_id:     epIdVal ? parseInt(epIdVal, 10) : null,
-              episode_number: f?.episode_number ?? null,
-              title:          f?.title ?? null,
-              date:           f?.date ?? null,
+              path:       row.dataset.path,
+              skip:       false,
+              episode_id: epIdVal ? parseInt(epIdVal, 10) : null,
+              // Only fields the user edited belong here; the server re-reads
+              // everything else from the file and never overwrites RSS data.
+              overrides:  {},
             });
           });
 
