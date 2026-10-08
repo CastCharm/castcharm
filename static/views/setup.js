@@ -6,7 +6,7 @@
 
 const _setupState = {
   step: 1,
-  totalSteps: 6,
+  totalSteps: 7,
   enableAuth: false,
   apiEnabled: true,
   username: "",
@@ -18,6 +18,7 @@ const _setupState = {
   filenameDatePrefix: true,
   filenameEpisodeNumber: true,
   organizeByYear: true,
+  defaultPlayOrderOldest: true,
   saveXml: true,
 };
 
@@ -89,7 +90,7 @@ function _renderSetupStep() {
 }
 
 function _stepBody(step) {
-  // Order: Login → Theme → Timezone → Storage → File options → External API.
+  // Order: Login → Theme → Timezone → Storage → File options → Listening order → External API.
   // External API is intentionally last: it's the only step that most first-time
   // users will neither understand nor need on day one, so we let them get
   // through the "make it look and behave right" decisions first.
@@ -99,7 +100,8 @@ function _stepBody(step) {
     case 3: return _stepTimezone();
     case 4: return _stepStorage();
     case 5: return _stepFileOptions();
-    case 6: return _stepExternalApi();
+    case 6: return _stepListeningOrder();
+    case 7: return _stepExternalApi();
     default: return "";
   }
 }
@@ -321,6 +323,24 @@ function _stepFileOptions() {
     </form>`;
 }
 
+// ── Step 6: Listening order ────────────────────────────────────────────────
+
+function _stepListeningOrder() {
+  return `
+    <h2 class="wiz-title">How do you like to listen?</h2>
+    <p class="wiz-desc">
+      When you press Play on a podcast, should it start with the newest episode
+      and work back in time, or start at the beginning and move forward like a
+      story? This becomes the default for podcasts you add. Each podcast can be
+      switched the other way in its own settings.
+    </p>
+    <form id="wiz-order-form">
+      ${toggle("Listen in chronological order", "default_play_order_oldest",
+        _setupState.defaultPlayOrderOldest,
+        "On: Play resumes where you left off, or starts at the oldest episode you haven't heard, and continues in order. Off: Play starts with the newest episode.")}
+    </form>`;
+}
+
 // ── Login step wiring ──────────────────────────────────────────────────────
 
 function _initLoginStep() {
@@ -386,6 +406,11 @@ async function _wizardNext() {
   }
 
   if (_setupState.step === 6) {
+    const orderForm = document.getElementById("wiz-order-form");
+    if (orderForm) _setupState.defaultPlayOrderOldest = collectForm(orderForm).default_play_order_oldest ?? false;
+  }
+
+  if (_setupState.step === 7) {
     // External API is the final step — capture the toggle then submit.
     const apiForm = document.getElementById("wiz-api-form");
     if (apiForm) _setupState.apiEnabled = collectForm(apiForm).api_enabled ?? true;
@@ -407,6 +432,7 @@ async function _wizardNext() {
         organize_by_year:        _setupState.organizeByYear,
         save_xml:                _setupState.saveXml,
         api_enabled:             _setupState.apiEnabled,
+        default_play_order:      _setupState.defaultPlayOrderOldest ? "oldest" : "newest",
       });
       localStorage.setItem("cc_theme", _setupState.theme);
       applyTheme(_setupState.theme);

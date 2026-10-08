@@ -166,6 +166,8 @@ const API = {
   // streamEpisode returns a URL string, not a promise — use directly in <audio src>
   streamEpisode: (id) => `/api/episodes/${id}/stream`,
   togglePlayed:     (id) => API.post(`/api/episodes/${id}/played`),
+  // Set rather than toggle — safe to repeat (used when an episode finishes).
+  setPlayed:        (id, played) => API.post(`/api/episodes/${id}/played`, { played }),
   updateProgress:   (id, position_seconds) => API.post(`/api/episodes/${id}/progress`, { position_seconds }),
   continueListening: (limit = 10) => API.get(`/api/episodes/continue-listening?limit=${limit}`),
   getSuggestions: () => API.get("/api/episodes/suggestions"),

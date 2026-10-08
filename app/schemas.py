@@ -26,6 +26,7 @@ class GlobalSettingsBase(BaseModel):
     auto_played_threshold: int = 98
     theme: str = "midnight"
     show_suggested_listening: bool = True
+    default_play_order: str = "oldest"      # 'oldest' (chronological, default) | 'newest'
     timezone: str = "UTC"
     scheduled_xml_enabled: bool = True
     scheduled_xml_time: str = "00:00"
@@ -78,7 +79,15 @@ class GlobalSettingsUpdate(BaseModel):
     auto_played_threshold: Optional[int] = Field(default=None, ge=0, le=100)
     theme: Optional[str] = Field(default=None, max_length=64)
     show_suggested_listening: Optional[bool] = None
+    default_play_order: Optional[str] = None
     timezone: Optional[str] = Field(default=None, max_length=64)
+
+    @field_validator("default_play_order")
+    @classmethod
+    def _default_play_order_known(cls, v):
+        if v is not None and v not in ("newest", "oldest"):
+            raise ValueError("default_play_order must be 'newest' or 'oldest'")
+        return v
     # The time fields are "HH:MM" from an <input type="time">. The cap is loose on
     # purpose — it is here to stop a megabyte being stored, not to validate the
     # format, which the scheduler does. A max_length of exactly 5 would sit right
@@ -216,10 +225,30 @@ class FeedUpdate(BaseModel):
     autoclean_enabled: Optional[bool] = None
     autoclean_mode: Optional[str] = Field(default=None, max_length=32)
     autoclean_exclude: Optional[bool] = None
+    # 'newest' (default) or 'oldest' = listen in order (story / serial).
+    play_order: Optional[str] = None
     # Not a Feed column. Set only after the user has been shown the
     # folder-already-exists prompt for a podcast_group rename and chosen to proceed;
     # update_feed() pops it before applying the rest of the fields.
     allow_existing_folder: bool = False
+
+    @field_validator("play_order")
+    @classmethod
+    def _play_order_known(cls, v):
+        if v is None:
+            return v
+        if v not in ("newest", "oldest"):
+            raise ValueError("play_order must be 'newest' or 'oldest'")
+        return v
+
+
+class NextUpOut(BaseModel):
+    """What "Continue" would play for a listen-in-order feed."""
+    episode_id: int
+    seq_number: Optional[int] = None
+    title: Optional[str] = None
+    position_seconds: int = 0
+    resume: bool = False          # True when picking up mid-episode
 
 
 class FeedOut(BaseModel):
@@ -268,8 +297,16 @@ class FeedOut(BaseModel):
     autoclean_enabled: bool = False
     autoclean_mode: Optional[str] = None
     autoclean_exclude: bool = False
+    play_order: str = "oldest"
+    # Only filled by GET /api/feeds/{id} for play_order == 'oldest'.
+    next_up: Optional[NextUpOut] = None
 
     model_config = {"from_attributes": True}
+
+    @field_validator("play_order", mode="before")
+    @classmethod
+    def _play_order_default(cls, v):
+        return v or "oldest"
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +350,7 @@ class EpisodeOut(BaseModel):
     created_at: datetime
     # Feed info for list views
     feed_title: Optional[str] = None
+    feed_play_order: Optional[str] = None   # 'newest' | 'oldest' (listen in order)
     feed_image_url: Optional[str] = None
 
     model_config = {"from_attributes": True}

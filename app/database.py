@@ -124,6 +124,7 @@ def _migrate_db():
         ("feeds",           "autoclean_enabled",             "BOOLEAN DEFAULT 0"),
         ("feeds",           "autoclean_mode",                "VARCHAR"),
         ("feeds",           "autoclean_exclude",             "BOOLEAN DEFAULT 0"),
+        ("feeds",           "play_order",                    "VARCHAR"),
         ("global_settings", "sync_lookback_limit",           "INTEGER DEFAULT 50"),
         ("episodes",        "imported",                      "BOOLEAN DEFAULT 0"),
         ("playlists",       "description",                   "TEXT"),
@@ -131,6 +132,7 @@ def _migrate_db():
         # keys, and the gate is "enabled AND valid key" — so this alone opens
         # nothing. Being on is what lets a native client enrol itself later.
         ("global_settings", "api_enabled",                   "BOOLEAN DEFAULT 1"),
+        ("global_settings", "default_play_order",            "VARCHAR DEFAULT 'oldest'"),
     ]
     new_tables = [
         """CREATE TABLE IF NOT EXISTS playlists (

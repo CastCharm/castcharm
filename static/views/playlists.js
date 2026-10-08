@@ -90,7 +90,7 @@ async function _playPlaylist(id) {
       context_filter: pl.filter || "unplayed",
     });
     if (state?.current_episode) {
-      window.playEpisode(state.current_episode.id);
+      window.playEpisode(state.current_episode.id, false, { contextSet: true });
       Toast.success(`Playing: ${escHTML(state.current_episode.title || "episode")}`);
     } else {
       Toast.info("No downloaded episodes to play in this playlist");

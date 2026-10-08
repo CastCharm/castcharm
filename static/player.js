@@ -404,7 +404,7 @@ const Player = (() => {
     if (!_pendingPlayed) return;
     const id = _pendingPlayed;
     _pendingPlayed = null;
-    API.togglePlayed(id).catch(() => {
+    API.setPlayed(id, true).catch(() => {
       if (!_pendingPlayed) _pendingPlayed = id;
     });
   }

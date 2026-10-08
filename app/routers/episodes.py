@@ -132,6 +132,7 @@ def _ep_out(ep: Episode) -> EpisodeOut:
     out = EpisodeOut.model_validate(ep)
     if ep.feed:
         out.feed_title = ep.feed.title
+        out.feed_play_order = ep.feed.play_order or "newest"
         # Our own cover endpoint, never the feed's RSS artwork URL. Handing that
         # out made every episode row fetch art from the podcast host directly,
         # which disclosed the user's IP and reading habits to a third party — one
@@ -783,9 +784,18 @@ def unhide_episode(episode_id: int, db: Session = Depends(get_db)):
     return _ep_out(ep)
 
 
+class PlayedBody(BaseModel):
+    played: bool
+
+
 @router.post("/{episode_id}/played", response_model=EpisodeOut)
-def toggle_played(episode_id: int, db: Session = Depends(get_db)):
-    """Toggle the played state of an episode."""
+def toggle_played(episode_id: int, body: PlayedBody | None = None, db: Session = Depends(get_db)):
+    """Set or toggle the played state of an episode.
+
+    With a body ({"played": true|false}) the state is *set*, so a repeated
+    call is harmless — what the players use when an episode finishes.  With
+    no body it toggles, as the row buttons always have.
+    """
     from datetime import datetime
     ep = (
         db.query(Episode)
@@ -795,7 +805,10 @@ def toggle_played(episode_id: int, db: Session = Depends(get_db)):
     )
     if not ep:
         raise HTTPException(status_code=404, detail="Episode not found")
-    ep.played = not ep.played
+    target = body.played if body is not None else (not ep.played)
+    if target == ep.played:
+        return _ep_out(ep)
+    ep.played = target
     if ep.played:
         ep.last_played_at = datetime.utcnow()
         if ep.duration:
