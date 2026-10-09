@@ -237,6 +237,29 @@ def is_api_enabled(db: Session) -> bool:
 
 # ── Auth state helpers ─────────────────────────────────────────────────────────
 
+def require_session(request) -> None:
+    """Reject callers authenticated by an API key; browser sessions only.
+
+    Used for settings that could be abused if a leaked key could change them
+    (where the server sends notifications, for instance). auth_method is set
+    by AuthMiddleware; it is absent only when auth is off entirely.
+    """
+    from fastapi import HTTPException
+    if getattr(request.state, "auth_method", None) == "api_key":
+        raise HTTPException(status_code=403, detail="This setting can only be changed from the web UI, not with an API key.")
+
+
+def require_login_enabled(db: Session) -> None:
+    """Refuse an action that must not be available on an open instance."""
+    from fastapi import HTTPException
+    if not is_auth_required(db):
+        raise HTTPException(
+            status_code=403,
+            detail="Turn on login under Settings → Security first. Notifications make this server send "
+                   "requests to an address you choose, so that choice has to be yours alone.",
+        )
+
+
 def is_auth_required(db: Session) -> bool:
     """True when the user has set up a login and it is currently enabled."""
     from app.models import GlobalSettings

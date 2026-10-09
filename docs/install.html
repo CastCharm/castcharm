@@ -240,6 +240,54 @@
       <p>Full API reference with an interactive "try it out" panel is at <code>/api/docs</code> on your instance (e.g. <code>http://localhost:8000/api/docs</code>). Use the <strong>Authorize</strong> button to paste an API key for testing.</p>
 
       <!-- Data & backups -->
+      <!-- Notifications -->
+      <h2 id="notifications">Notifications</h2>
+      <p>
+        CastCharm can send you a message when it finds new episodes: one message per sync,
+        listing the podcasts and episodes. There's nothing to install on the server. Under
+        <strong>Settings → Notifications</strong>, choose how to send it and paste one address.
+      </p>
+      <ul>
+        <li><strong>ntfy</strong> — the simplest option. Pick a topic name and use
+          <code>https://ntfy.sh/your-topic</code>, or the same path on your own ntfy server. Install the
+          ntfy app on your phone and subscribe to that topic. The topic name is the only thing
+          protecting it, so choose something hard to guess, or add an access token in the form.</li>
+        <li><strong>Apprise API</strong> — for Discord, Telegram, email, Pushover, Matrix and a hundred other
+          services. Run the <a href="https://github.com/caronc/apprise-api" target="_blank" rel="noopener">Apprise API</a>
+          container next to CastCharm, configure your services there, and point CastCharm at
+          <code>http://apprise:8000/notify/your-key</code>. CastCharm itself stays generic and never holds
+          those services' tokens.</li>
+        <li><strong>Webhook</strong> — for anything else (Home Assistant, n8n, your own script).
+          CastCharm sends a POST with this JSON:</li>
+      </ul>
+      <div class="code-card">
+        <div class="code-header">
+          <div class="code-dots"><span></span><span></span><span></span></div>
+          <span>webhook body</span>
+        </div>
+        <pre>{
+  "event": "new_episodes",
+  "title": "2 new episodes",
+  "message": "Podcast — Episode title\nOther podcast — Another episode",
+  "count": 2,
+  "link": "https://podcasts.example.com",
+  "feeds": [{ "id": 7, "title": "Podcast", "episodes": [{ "id": 912, "title": "Episode title", "published_at": "2026-10-09T06:00:00" }] }],
+  "sent_at": "2026-10-09T06:05:12Z"
+}</pre>
+      </div>
+      <p>
+        Fill in <strong>Public URL</strong> with the address you open CastCharm at and the message
+        will link straight to the podcast. Use <strong>Send test message</strong> after saving to make
+        sure it arrives.
+      </p>
+      <p>
+        Notifications are only available once login is turned on (Settings → Security). Sending a
+        message means the server makes a request to an address of your choosing; on an open
+        instance anyone on the network could change that address, so the setting is reserved for
+        the signed-in owner, can't be changed with an API key, and the server never follows
+        redirects or shows the reply it gets back.
+      </p>
+
       <h2>Data &amp; backups</h2>
       <ul>
         <li><strong>Database</strong> — <code>DATA_PATH/castcharm.db</code>. This single file contains all feeds, episode records, settings, and playback history. Copy it to back everything up.</li>

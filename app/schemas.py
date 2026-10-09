@@ -27,6 +27,10 @@ class GlobalSettingsBase(BaseModel):
     theme: str = "midnight"
     show_suggested_listening: bool = True
     default_play_order: str = "oldest"      # 'oldest' (chronological, default) | 'newest'
+    # Notifications: the URL and token are write-only (see GlobalSettingsOut).
+    notify_enabled: bool = False
+    notify_kind: Optional[str] = None
+    public_url: Optional[str] = None
     timezone: str = "UTC"
     scheduled_xml_enabled: bool = True
     scheduled_xml_time: str = "00:00"
@@ -108,10 +112,42 @@ class GlobalSettingsUpdate(BaseModel):
     # many entries, so the bound is a backstop rather than a restriction.
     sync_lookback_limit: Optional[int] = Field(default=None, ge=0, le=100_000)
     api_enabled: Optional[bool] = None
+    # Notifications. notify_url / notify_token: a value replaces, "" clears,
+    # absent leaves unchanged. They are credentials and never read back.
+    notify_enabled: Optional[bool] = None
+    notify_kind: Optional[str] = Field(default=None, max_length=16)
+    notify_url: Optional[str] = Field(default=None, max_length=2048)
+    notify_token: Optional[str] = Field(default=None, max_length=512)
+    public_url: Optional[str] = Field(default=None, max_length=2048)
+
+    @field_validator("notify_kind")
+    @classmethod
+    def _notify_kind_known(cls, v):
+        from app.notifications import KINDS
+        if v is not None and v not in KINDS:
+            raise ValueError("notify_kind must be one of " + ", ".join(KINDS))
+        return v
+
+    @field_validator("notify_url", "public_url")
+    @classmethod
+    def _http_url_or_empty(cls, v):
+        if v is None:
+            return v
+        v = v.strip()
+        if v == "":
+            return v
+        from app.utils import validate_http_url
+        validate_http_url(v)   # raises ValueError → 422
+        return v
 
 
 class GlobalSettingsOut(GlobalSettingsBase):
     id: int
+    # Computed in the settings router: whether a destination/token is saved,
+    # and the destination's host so the form can say where messages go.
+    notify_url_set: bool = False
+    notify_url_host: Optional[str] = None
+    notify_token_set: bool = False
 
     model_config = {"from_attributes": True}
 

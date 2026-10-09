@@ -333,6 +333,64 @@ async function viewSettings() {
         </div>
 
         <!-- Default ID3 mapping -->
+        <!-- Notifications -->
+        <div class="panel" id="panel-notify">
+          <div class="panel-header" data-action="toggle-panel" data-panel="panel-notify">
+            <div class="panel-header-title">
+              ${svg('<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>', 'width="16" height="16"')}
+              Notifications
+            </div>
+            <svg class="panel-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </div>
+          <div class="panel-body">
+            ${authStatus.auth_enabled ? `
+            <div class="form-hint" style="margin-bottom:12px">
+              Get a message when new episodes are found. Paste the address of the service you
+              want it sent to — see <a href="https://www.castcharm.org/install.html#notifications" target="_blank" rel="noopener">the docs</a>
+              for examples.
+            </div>
+            ${toggle("Enable notifications", "notify_enabled", settings.notify_enabled ?? false,
+              "One message per sync run, listing the podcasts and episodes that were found.")}
+            <div class="form-group">
+              <label class="form-label">Send with</label>
+              <select class="form-control" name="notify_kind" id="notify-kind" style="max-width:260px">
+                ${[["ntfy","ntfy"],["apprise","Apprise API"],["webhook","Webhook (JSON)"]]
+                  .map(([v,l]) => `<option value="${v}" ${(settings.notify_kind || "ntfy") === v ? "selected" : ""}>${l}</option>`).join("")}
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Destination URL</label>
+              <input class="form-control" name="notify_url" id="notify-url" type="url" autocomplete="off"
+                     data-saved-placeholder="${settings.notify_url_set ? `Saved (${escHTML(settings.notify_url_host || "")}) — paste a new URL to replace` : ""}" />
+              <div class="form-hint" id="notify-url-hint"></div>
+              ${settings.notify_url_set ? `<div class="form-hint"><a href="#" data-action="notify-clear" data-field="url">Clear the saved URL</a></div>` : ""}
+            </div>
+            <div class="form-group">
+              <label class="form-label">Access token (optional)</label>
+              <input class="form-control" name="notify_token" id="notify-token" type="password" autocomplete="new-password"
+                     placeholder="${settings.notify_token_set ? "Saved — enter a new token to replace" : "Only if your service needs one"}" style="max-width:420px" />
+              <div class="form-hint">Sent as a bearer token. ntfy access tokens and Apprise API keys go here.</div>
+              ${settings.notify_token_set ? `<div class="form-hint"><a href="#" data-action="notify-clear" data-field="token">Clear the saved token</a></div>` : ""}
+            </div>
+            <div class="form-group">
+              <label class="form-label">Public URL of this server (optional)</label>
+              <input class="form-control" name="public_url" type="url" autocomplete="off"
+                     value="${escHTML(settings.public_url || "")}" placeholder="https://podcasts.example.com" style="max-width:420px" />
+              <div class="form-hint">The address you open CastCharm at. Lets a notification link straight to the podcast.</div>
+            </div>
+            <div class="form-hint" style="margin-bottom:8px">Save your settings first, then send a test to confirm it arrives.</div>
+            <button type="button" class="btn btn-ghost btn-sm" id="btn-notify-test" data-action="notify-test">Send test message</button>
+            ` : `
+            <div class="form-hint">
+              Notifications need login to be turned on (see <strong>Security</strong> below), so that
+              only you can choose where this server sends messages.
+            </div>
+            `}
+          </div>
+        </div>
+
         <div class="panel" id="panel-id3">
           <div class="panel-header" data-action="toggle-panel" data-panel="panel-id3">
             <div class="panel-header-title">
@@ -567,6 +625,32 @@ async function viewSettings() {
   window._settingsDirty = false;
   form.addEventListener("change", () => { window._settingsDirty = true; });
 
+  // Notification destination hint follows the chosen service.
+  const notifyKind = form.querySelector("#notify-kind");
+  if (notifyKind) {
+    // The example in the box and the sentence under it both follow the service.
+    // A saved URL keeps its "Saved (host)" placeholder, since the box being
+    // empty then means "keep what is saved", not "nothing configured".
+    const examples = {
+      ntfy: "https://ntfy.sh/your-topic",
+      apprise: "http://apprise:8000/notify/your-key",
+      webhook: "https://example.com/hooks/castcharm",
+    };
+    const hints = {
+      ntfy: "Your ntfy topic, on ntfy.sh or your own server. The topic name is the only thing protecting it, so pick something hard to guess, or add an access token below.",
+      apprise: "The Apprise API container you run, with your services configured on its side — Discord, Telegram, email and a hundred others.",
+      webhook: "Any URL that accepts a POST with a small JSON document: title, message, count, link and the list of podcasts and episodes.",
+    };
+    const paint = () => {
+      const h = document.getElementById("notify-url-hint");
+      if (h) h.textContent = hints[notifyKind.value] || "";
+      const box = document.getElementById("notify-url");
+      if (box && !window._notifyClear?.url) box.placeholder = box.dataset.savedPlaceholder || examples[notifyKind.value] || "";
+    };
+    notifyKind.addEventListener("change", paint);
+    paint();
+  }
+
   // Expose save logic so the navigation guard can call it programmatically
   window._settingsSave = async function() {
     const raw = collectForm(form);
@@ -607,6 +691,17 @@ async function viewSettings() {
       save_xml: raw.save_xml ?? false,
       auto_download_new: raw.auto_download_new ?? true,
       default_play_order: raw.default_play_order_oldest ? "oldest" : "newest",
+      // Notification fields ride along only when login is on (the panel is
+      // not rendered otherwise, so raw has none of them). The URL and token
+      // are write-only: a blank input means "keep what is saved", and the
+      // Clear links send an explicit empty string.
+      ...(form.querySelector("#notify-kind") ? {
+        notify_enabled: raw.notify_enabled ?? false,
+        notify_kind: raw.notify_kind || "ntfy",
+        public_url: (raw.public_url || "").trim(),
+        ...(window._notifyClear?.url ? { notify_url: "" } : raw.notify_url ? { notify_url: raw.notify_url.trim() } : {}),
+        ...(window._notifyClear?.token ? { notify_token: "" } : raw.notify_token ? { notify_token: raw.notify_token } : {}),
+      } : {}),
       sync_lookback_limit: clamp(raw.sync_lookback_limit, 0, 100000, 50),
       default_id3_mapping: id3Mapping,
       log_max_entries: clamp(raw.log_max_entries, 10, 50000, 500),
@@ -637,6 +732,7 @@ async function viewSettings() {
       await API.putSettings(payload);
       Player.setThreshold(payload.auto_played_threshold);
       window._settingsDirty = false;
+      window._notifyClear = null;
       Toast.success("Settings saved");
       return true;
     } catch (err) {
@@ -663,6 +759,38 @@ window._updateAutocleanModeHints = function() {
     const input = document.querySelector('[name="keep_latest"]');
     if (input && !input.value) input.value = "10";
   }
+};
+
+window._notifySendTest = async function() {
+  const btn = document.getElementById("btn-notify-test");
+  if (!btn) return;
+  if (window._settingsDirty) {
+    Toast.error("Save your settings first, then send the test.");
+    return;
+  }
+  btn.disabled = true;
+  const orig = btn.textContent;
+  btn.textContent = "Sending…";
+  try {
+    const res = await API.notifyTest();
+    if (res.ok) Toast.success(`Test message delivered (${res.detail})`);
+    else Toast.error(`Not delivered: ${res.detail}`);
+  } catch (e) {
+    Toast.error(e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = orig;
+  }
+};
+
+// Marks a saved URL/token to be cleared on the next save (the inputs are
+// write-only, so an empty box alone means "leave it").
+window._notifyClearField = function(field) {
+  window._notifyClear = { ...(window._notifyClear || {}), [field]: true };
+  const input = document.getElementById(field === "url" ? "notify-url" : "notify-token");
+  if (input) { input.value = ""; input.placeholder = "Will be cleared when you save"; }
+  window._settingsDirty = true;
+  Toast.info("Will be cleared when you save settings.");
 };
 
 window._runAutocleanNow = async function() {

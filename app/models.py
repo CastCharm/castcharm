@@ -75,6 +75,17 @@ class GlobalSettings(Base):
     # nobody anything, and it keeps native clients able to enrol themselves.
     api_enabled = Column(Boolean, default=True)
 
+    # Outbound notifications (see app/notifications.py). notify_url and
+    # notify_token are credentials (a webhook URL or ntfy topic *is* the
+    # secret) and are never returned by the API — only "is set" and the host.
+    notify_enabled = Column(Boolean, default=False)
+    notify_kind = Column(String, nullable=True)      # ntfy | apprise | webhook | discord | slack
+    notify_url = Column(String, nullable=True)
+    notify_token = Column(String, nullable=True)
+    # Where users reach this server (https://podcasts.example.com); lets
+    # notifications link back to the podcast page. Optional.
+    public_url = Column(String, nullable=True)
+
 
 class AuthSession(Base):
     __tablename__ = "auth_sessions"

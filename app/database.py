@@ -133,6 +133,11 @@ def _migrate_db():
         # nothing. Being on is what lets a native client enrol itself later.
         ("global_settings", "api_enabled",                   "BOOLEAN DEFAULT 1"),
         ("global_settings", "default_play_order",            "VARCHAR DEFAULT 'oldest'"),
+        ("global_settings", "notify_enabled",                "BOOLEAN DEFAULT 0"),
+        ("global_settings", "notify_kind",                   "VARCHAR"),
+        ("global_settings", "notify_url",                    "VARCHAR"),
+        ("global_settings", "notify_token",                  "VARCHAR"),
+        ("global_settings", "public_url",                    "VARCHAR"),
     ]
     new_tables = [
         """CREATE TABLE IF NOT EXISTS playlists (

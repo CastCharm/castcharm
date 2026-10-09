@@ -87,6 +87,8 @@ def _refresh_feed_job(feed_id: int):
             if was_complete and new_ids:
                 from app.downloader import auto_download_new_episodes
                 auto_download_new_episodes(feed, new_ids, db)
+                from app import notifications
+                notifications.queue_new_episodes(new_ids)
 
         except Exception as e:
             log.warning("Feed %d refresh failed: %s", feed_id, e)
@@ -202,6 +204,9 @@ def _daily_sync_all():
             _refresh_feed_job(fid)
         except Exception as e:
             log.warning("Daily sync failed for feed %d: %s", fid, e)
+    # This run has a known end: send whatever the feeds turned up as one message.
+    from app import notifications
+    notifications.flush_now()
 
 
 def schedule_daily_sync():

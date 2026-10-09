@@ -74,6 +74,7 @@ const API = {
   getSettings:      () =>  API.get("/api/settings"),
   putSettings:      (b) => API.put("/api/settings", b),
   runAutocleanNow:  ()  => API.post("/api/settings/autoclean/run", {}),
+  notifyTest:       ()  => API.post("/api/settings/notifications/test", {}),
   getID3Tags:       () =>  API.get("/api/settings/id3-tags"),
   getRSSSources:    () =>  API.get("/api/settings/rss-sources"),
   getServerTimezone: () => API.get("/api/settings/server-timezone"),
