@@ -1526,6 +1526,8 @@ def _bg_sync(feed_id: int):
                 auto_download_new_episodes(feed, new_ids, db)
             except Exception as e:
                 log.warning("auto_download_new failed for feed %d: %s", feed_id, e)
+            from app import notifications
+            notifications.queue_new_episodes(new_ids)
 
         if was_initial and feed.download_all_on_first_sync:
             try:

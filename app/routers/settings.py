@@ -1,6 +1,6 @@
 import logging
 from typing import Optional
-from fastapi import APIRouter, Depends, Query
+from fastapi import Request, APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 log = logging.getLogger(__name__)
@@ -70,15 +70,43 @@ def _get_or_create_settings(db: Session) -> GlobalSettings:
     return settings
 
 
+def _settings_out(settings: GlobalSettings) -> GlobalSettingsOut:
+    """The API view of settings: everything except credentials, plus the
+    'is a destination saved, and where' facts the form needs."""
+    from app.notifications import host_of
+    out = GlobalSettingsOut.model_validate(settings)
+    out.notify_url_set = bool(settings.notify_url)
+    out.notify_url_host = host_of(settings.notify_url) if settings.notify_url else None
+    out.notify_token_set = bool(settings.notify_token)
+    return out
+
+
+_NOTIFY_FIELDS = {"notify_enabled", "notify_kind", "notify_url", "notify_token", "public_url"}
+
+
 @router.get("", response_model=GlobalSettingsOut)
 def get_settings(db: Session = Depends(get_db)):
-    return _get_or_create_settings(db)
+    return _settings_out(_get_or_create_settings(db))
 
 
 @router.put("", response_model=GlobalSettingsOut)
-def update_settings(body: GlobalSettingsUpdate, db: Session = Depends(get_db)):
+def update_settings(body: GlobalSettingsUpdate, request: Request, db: Session = Depends(get_db)):
     settings = _get_or_create_settings(db)
     updates = body.model_dump(exclude_unset=True)
+
+    # Pointing the server at a notification destination is admin-only, and
+    # only meaningful once there is an admin: with login off anyone on the
+    # network could do it. API keys can't do it either.
+    if updates.keys() & _NOTIFY_FIELDS:
+        from app.auth import require_login_enabled, require_session
+        require_session(request)
+        if updates.get("notify_url") or updates.get("notify_token") or updates.get("notify_enabled"):
+            require_login_enabled(db)
+    # Write-only credentials: "" clears, a value replaces.
+    for secret in ("notify_url", "notify_token"):
+        if secret in updates:
+            updates[secret] = updates[secret] or None
+
     for field, value in updates.items():
         setattr(settings, field, value)
     db.commit()
@@ -112,7 +140,28 @@ def update_settings(body: GlobalSettingsUpdate, db: Session = Depends(get_db)):
         if changed & {"autoclean_enabled", "autoclean_mode", "keep_latest", "autoclean_time", "timezone"}:
             schedule_autoclean()
     log.info("Settings updated: %s", ", ".join(updates.keys()))
-    return settings
+    return _settings_out(settings)
+
+
+_last_notify_test_at = 0.0
+
+
+@router.post("/notifications/test")
+def test_notification(request: Request, db: Session = Depends(get_db)):
+    """Send a fixed test message to the saved destination."""
+    import time
+    from app import notifications
+    from app.auth import require_login_enabled, require_session
+    global _last_notify_test_at
+    require_session(request)
+    require_login_enabled(db)
+    now = time.monotonic()
+    if now - _last_notify_test_at < 10.0:
+        raise HTTPException(status_code=429, detail="Please wait a few seconds between test messages.")
+    _last_notify_test_at = now
+    settings = _get_or_create_settings(db)
+    result = notifications.send_for_settings(settings, notifications.test_message(settings.public_url))
+    return {"ok": result.ok, "status": result.status, "detail": result.detail}
 
 
 @router.post("/autoclean/run")

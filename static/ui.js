@@ -307,6 +307,8 @@ document.addEventListener("click", (e) => {
   // ── Settings ──────────────────────────────────────────────
   if (action === "select-theme")   { selectTheme(el.dataset.theme); return; }
   if (action === "autoclean-now")  { _runAutocleanNow(); return; }
+  if (action === "notify-test")    { _notifySendTest(); return; }
+  if (action === "notify-clear")   { _notifyClearField(el.dataset.field); return; }
   if (action === "sec-update-credentials") { _secUpdateCredentials(); return; }
   if (action === "sec-disable-auth")       { _secDisableAuth(); return; }
   if (action === "sec-enable-auth")        { _secEnableAuth(); return; }
