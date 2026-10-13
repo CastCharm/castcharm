@@ -79,6 +79,7 @@ async def lifespan(app: FastAPI):
 
     init_db()
     _ensure_default_settings()
+    _ensure_system_playlists()
     _cleanup_interrupted_downloads()
     start_scheduler()
     # Pre-process index.html: inject ?v=<token> into all /static/ asset URLs so
@@ -101,6 +102,16 @@ def _ensure_default_settings():
         if not db.query(GlobalSettings).first():
             db.add(GlobalSettings(default_id3_mapping=DEFAULT_ID3_MAPPING))
             db.commit()
+    finally:
+        db.close()
+
+
+def _ensure_system_playlists():
+    """Create the built-in "Get Caught Up" smart playlist if it is missing."""
+    from app.routers.playlists import ensure_system_playlists
+    db = SessionLocal()
+    try:
+        ensure_system_playlists(db)
     finally:
         db.close()
 

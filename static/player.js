@@ -268,6 +268,9 @@ const Player = (() => {
   // ── After mark-played: reset button state + remove from Continue Listening ──
 
   function _afterMarkPlayed(epId) {
+    // Views that list "unplayed" things (Get Caught Up, smart playlists) drop
+    // the episode on this signal rather than waiting for a refresh.
+    window._onEpisodePlayedChanged?.(epId, true);
     // Strip resumable state so _syncPlayBtns renders the plain play icon.
     document.querySelectorAll(`.ep-play-btn[data-ep-id="${epId}"]`).forEach((btn) => {
       delete btn.dataset.resumable;

@@ -153,3 +153,4 @@ def test_default_play_order_applies_to_feeds_without_their_own(client):
     client.put(f"/api/feeds/{fid}", json={"play_order": "oldest"})
     assert _play(client, fid)["current_episode_id"] == ids[0]
     assert client.put("/api/settings", json={"default_play_order": "sideways"}).status_code == 422
+

@@ -240,10 +240,15 @@ def list_episodes(
     limit: int = Query(50, ge=1, le=MAX_PAGE_SIZE),
     offset: int = Query(0, ge=0),
     download_since: Optional[datetime] = None,
+    published_since: Optional[datetime] = None,
+    played: Optional[bool] = None,
     sort: str | None = None,
     db: Session = Depends(get_db),
 ):
-    """List episodes, newest first.
+    """List episodes, newest first (``sort=published_asc`` for oldest first).
+
+    ``played``, ``published_since`` and ``sort=published_asc`` let a client ask
+    for "unplayed, published in the last N days, oldest first" in one call.
 
     An over-large limit is rejected with a 422 rather than quietly trimmed, so a
     caller always knows how much of the collection it actually received. See
@@ -264,7 +269,13 @@ def list_episodes(
         q = q.filter(or_(Episode.title.ilike(pat), Episode.description.ilike(pat)))
     if download_since is not None:
         q = q.filter(Episode.download_date >= download_since)
-    if sort == "download_date":
+    if published_since is not None:
+        q = q.filter(Episode.published_at >= published_since)
+    if played is not None:
+        q = q.filter(Episode.played.is_(played))
+    if sort == "published_asc":
+        episodes = q.order_by(*episode_order_key()).offset(offset).limit(limit).all()
+    elif sort == "download_date":
         episodes = q.order_by(Episode.download_date.desc().nullslast(), Episode.id.desc()).offset(offset).limit(limit).all()
     elif status in ("queued", "downloading"):
         episodes = q.order_by(Episode.queued_at.asc().nullslast(), Episode.id.asc()).offset(offset).limit(limit).all()

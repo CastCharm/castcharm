@@ -175,6 +175,7 @@ const API = {
   getActiveProgress: () => API.get("/api/episodes/active-progress"),
 
   // ── Playlists ─────────────────────────────────────────────────
+  previewPlaylist:   (rules) => API.post("/api/playlists/preview", rules),
   getPlaylists:          ()       => API.get("/api/playlists"),
   createPlaylist:        (body)   => API.post("/api/playlists", body),
   updatePlaylist:        (id, b)  => API.put(`/api/playlists/${id}`, b),

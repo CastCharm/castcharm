@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Any, Optional
-from pydantic import BaseModel, Field, HttpUrl, field_validator
+from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 
 from app.limits import MAX_CONCURRENT_DOWNLOADS, MAX_PAGE_SIZE
 
@@ -396,21 +396,110 @@ class EpisodeOut(BaseModel):
 # Playlists
 # ---------------------------------------------------------------------------
 
+# --- Smart playlist rules -------------------------------------------------
+# A saved query.  Every present condition must hold (AND); absent ones are
+# "any".  Kept deliberately small so the phone can evaluate the same rules
+# offline over its local episode table.  Unknown keys are rejected so a typo
+# never silently widens a list.
+
+class SmartFeedsRule(BaseModel):
+    model_config = {"extra": "forbid"}
+    mode: str = "include"                       # 'include' | 'exclude'
+    ids: list[int] = Field(default_factory=list, max_length=500)
+
+    @field_validator("mode")
+    @classmethod
+    def _mode_known(cls, v):
+        if v not in ("include", "exclude"):
+            raise ValueError("feeds.mode must be 'include' or 'exclude'")
+        return v
+
+
+class SmartPublishedRule(BaseModel):
+    model_config = {"extra": "forbid"}
+    within_days: Optional[int] = Field(default=None, ge=1, le=3650)
+    after: Optional[str] = Field(default=None, max_length=10)    # YYYY-MM-DD
+    before: Optional[str] = Field(default=None, max_length=10)   # YYYY-MM-DD
+
+    @field_validator("after", "before")
+    @classmethod
+    def _iso_date(cls, v):
+        if v is None:
+            return v
+        try:
+            datetime.strptime(v, "%Y-%m-%d")
+        except ValueError:
+            raise ValueError("dates must be YYYY-MM-DD")
+        return v
+
+
+class SmartDurationRule(BaseModel):
+    model_config = {"extra": "forbid"}
+    min_minutes: Optional[int] = Field(default=None, ge=0, le=100_000)
+    max_minutes: Optional[int] = Field(default=None, ge=1, le=100_000)
+
+
+SMART_PLAYED = ("unplayed", "in_progress", "played", "any")
+SMART_SORTS = ("oldest", "newest", "shortest", "longest")
+
+
+class SmartRules(BaseModel):
+    model_config = {"extra": "forbid"}
+    feeds: Optional[SmartFeedsRule] = None
+    played: str = "unplayed"
+    published: Optional[SmartPublishedRule] = None
+    duration: Optional[SmartDurationRule] = None
+    title_contains: Optional[str] = Field(default=None, max_length=200)
+    sort: str = "oldest"
+    limit: Optional[int] = Field(default=None, ge=1, le=1000)
+
+    @field_validator("played")
+    @classmethod
+    def _played_known(cls, v):
+        if v not in SMART_PLAYED:
+            raise ValueError("played must be one of " + ", ".join(SMART_PLAYED))
+        return v
+
+    @field_validator("sort")
+    @classmethod
+    def _sort_known(cls, v):
+        if v not in SMART_SORTS:
+            raise ValueError("sort must be one of " + ", ".join(SMART_SORTS))
+        return v
+
+
+PLAYLIST_TYPES = ("custom", "smart")     # 'custom' is shown to people as "Manual"
+
+
 class PlaylistCreate(BaseModel):
     # Bounded because these are stored: without a limit a client can write an
     # arbitrarily large string into the database, where the cost outlives the
     # request. Same reasoning as SetImageBody in app/routers/episodes.py.
     name: str = Field(max_length=500)
     description: Optional[str] = Field(default=None, max_length=5000)
-    type: str = Field(default="custom", max_length=32)   # 'feed' | 'custom'
-    feed_id: Optional[int] = None
-    filter: str = Field(default="unplayed", max_length=32)  # 'all' | 'unplayed'
+    type: str = Field(default="custom", max_length=32)   # 'custom' (manual) | 'smart' — fixed for life
+    rules: Optional[SmartRules] = None                   # required for smart, forbidden for manual
+
+    @field_validator("type")
+    @classmethod
+    def _type_known(cls, v):
+        if v not in PLAYLIST_TYPES:
+            raise ValueError("type must be 'custom' (manual) or 'smart'")
+        return v
+
+    @model_validator(mode="after")
+    def _rules_match_type(self):
+        if self.type == "smart" and self.rules is None:
+            raise ValueError("a smart playlist needs rules")
+        if self.type == "custom" and self.rules is not None:
+            raise ValueError("a manual playlist cannot have rules")
+        return self
 
 
 class PlaylistUpdate(BaseModel):
     name: Optional[str] = Field(default=None, max_length=500)
     description: Optional[str] = Field(default=None, max_length=5000)
-    filter: Optional[str] = Field(default=None, max_length=32)
+    rules: Optional[SmartRules] = None                   # smart playlists only
 
 
 class PlaylistEpisodeOut(BaseModel):
@@ -426,13 +515,34 @@ class PlaylistOut(BaseModel):
     id: int
     name: str
     description: Optional[str] = None
-    type: str
-    feed_id: Optional[int] = None
-    filter: str
+    type: str                                  # 'custom' (manual) | 'smart'
+    feed_id: Optional[int] = None              # legacy, unused
+    filter: str = "unplayed"                   # legacy, unused
+    rules: Optional[dict] = None               # smart playlists only
+    is_system: bool = False                    # built-in ("Get Caught Up")
     created_at: datetime
     episode_count: int = 0
+    total_seconds: int = 0
 
     model_config = {"from_attributes": True}
+
+    # The column holds JSON text; the API speaks objects.
+    @field_validator("rules", mode="before")
+    @classmethod
+    def _rules_from_json(cls, v):
+        if isinstance(v, str):
+            import json
+            try:
+                return json.loads(v) if v else None
+            except ValueError:
+                return None
+        return v
+
+
+class SmartPreviewOut(BaseModel):
+    count: int
+    total_seconds: int
+    sample: list[dict]
 
 
 class PlaylistEpisodeAdd(BaseModel):
@@ -469,9 +579,16 @@ class PlayerStateOut(BaseModel):
 
 class PlayerPlayRequest(BaseModel):
     context_type: str              # 'feed' | 'playlist'
-    context_id: int
+    context_id: int                # feed id or playlist id
     episode_id: Optional[int] = None   # if omitted, smart-start logic applies
     context_filter: str = "unplayed"   # only used when context_type='feed'
+
+    @field_validator("context_type")
+    @classmethod
+    def _context_type_known(cls, v):
+        if v not in ("feed", "playlist"):
+            raise ValueError("context_type must be 'feed' or 'playlist'")
+        return v
 
 
 # ---------------------------------------------------------------------------

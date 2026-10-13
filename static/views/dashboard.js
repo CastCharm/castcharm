@@ -4,6 +4,7 @@ window._markCLPlayed = async function(epId) {
   try {
     await API.togglePlayed(epId);
     updateStatus();
+    window._onEpisodePlayedChanged?.(epId, true);
     if (Player.currentId() === epId) Player.togglePause();
     const item = document.getElementById(`cl-ep-${epId}`);
     const card = item?.closest(".card");
@@ -98,7 +99,7 @@ window._refreshSuggestions = async function(btn) {
 // ============================================================
 function _upsertCLItem(playerEp, posSeconds) {
   // Only operates when the dashboard is currently rendered
-  const anchor = document.getElementById("newest-episodes-card");
+  const anchor = document.getElementById("catchup-card");
   if (!anchor) return;
 
   const minsIn = posSeconds > 59 ? Math.floor(posSeconds / 60) + "m in" : "";
@@ -163,22 +164,127 @@ function _upsertCLItem(playerEp, posSeconds) {
 }
 
 // ============================================================
+// Get Caught Up: unplayed, downloaded, published in the last N days, oldest first.
+// The list is the built-in smart playlist, so
+// "Play all" and the row buttons simply start that context.
+// ============================================================
+function _durSeconds(d) {
+  if (d == null || d === "") return 0;
+  if (typeof d === "number") return d;
+  const parts = String(d).split(":").map(Number);
+  if (parts.some(isNaN)) return 0;
+  return parts.reduce((acc, n) => acc * 60 + n, 0);
+}
+
+function _fmtHours(sec) {
+  const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
+  return h ? `${h} h${m ? ` ${m} m` : ""}` : `${m} m`;
+}
+
+function _catchupSummary(eps, pl) {
+  const total = eps.reduce((s, ep) => s + _durSeconds(ep.duration), 0);
+  const n = eps.length;
+  return `${n} episode${n === 1 ? "" : "s"}${total ? ` · ${_fmtHours(total)}` : ""}${pl ? ` · ${escHTML(_describeRules(pl.rules))}` : ""}`;
+}
+
+function _catchupCardBody(pl, eps) {
+  const title = pl ? escHTML(pl.name) : "Get Caught Up";
+  return `
+    <div class="flex items-center justify-between gap-2" style="margin-bottom:4px">
+      <div>
+        <div class="section-title" style="margin-bottom:2px">${title}</div>
+        <div class="activity-sub">${_catchupSummary(eps, pl)}</div>
+      </div>
+      <div class="flex items-center gap-2">
+        ${pl ? `<button class="btn btn-ghost btn-sm" data-action="catchup-edit" title="Change what this list gathers">Edit rules</button>` : ""}
+        ${eps.length ? `<button class="btn btn-primary btn-sm" data-action="catchup-play" title="Play every episode below, in order">
+          ${svg('<polygon points="5 3 19 12 5 21 5 3"/>')} Play all
+        </button>` : ""}
+      </div>
+    </div>
+    ${eps.length === 0
+      ? `<div class="empty-state" style="padding:24px 16px">
+          <div class="empty-state-title" style="font-size:13px">You're all caught up!</div>
+          <div class="empty-state-desc" style="max-width:none">${pl ? `You don't have any episodes that match the following criteria:<br><span style="color:var(--text-2)">${escHTML(_describeRules(pl.rules))}</span>` : "The built-in Get Caught Up playlist is missing; restart the server to recreate it."}</div>
+        </div>`
+      : `${eps.slice(0, 8).map(_catchupRow).join("")}
+         ${eps.length > 8 ? `<details class="catchup-more">
+           <summary class="activity-sub" style="cursor:pointer;padding:8px 0">Show ${eps.length - 8} more</summary>
+           ${eps.slice(8).map(_catchupRow).join("")}
+         </details>` : ""}`}`;
+}
+
+// Re-ask the server what the list holds now. Rows that left animate out,
+// then the card redraws (count, hours, empty state) from the fresh answer.
+async function _catchupRefresh() {
+  const card = document.querySelector("#catchup-card .card-body");
+  const pl0 = window._catchupPlaylist;
+  if (!card || !pl0) return;
+  try {
+    const [pls, eps] = await Promise.all([API.getPlaylists(), API.getPlaylistEpisodes(pl0.id)]);
+    const pl = pls.find((p) => p.id === pl0.id) || pl0;
+    window._catchupPlaylist = pl;
+    if (!document.querySelector("#catchup-card .card-body")) return;
+    const keep = new Set(eps.map((e) => e.id));
+    const gone = [...card.querySelectorAll("[id^='cu-ep-']")].filter((row) => !keep.has(Number(row.id.replace("cu-ep-", ""))));
+    const redraw = () => { const c = document.querySelector("#catchup-card .card-body"); if (c) c.innerHTML = _catchupCardBody(pl, eps); };
+    if (!gone.length) { redraw(); return; }
+    let left = gone.length;
+    gone.forEach((row) => animateRemove(row, () => { if (--left === 0) redraw(); }));
+  } catch (_) { /* next full render will catch up */ }
+}
+
+function _catchupRow(ep) {
+  const resumable = !ep.played && ep.play_position_seconds > 0;
+  return `
+    <div class="activity-item" id="cu-ep-${ep.id}" style="cursor:pointer"
+         data-action="navigate" data-path="/feeds/${ep.feed_id}" data-ep-scroll="${ep.id}">
+      <div class="activity-icon">
+        ${_thumb(ep.custom_image_url || ep.episode_image_url || ep.feed_image_url)}
+      </div>
+      <div class="activity-info">
+        <div class="activity-title truncate">${escHTML(ep.title || "Untitled")}</div>
+        <div class="activity-sub">
+          <span class="feed-link" data-action="navigate" data-path="/feeds/${ep.feed_id}">${escHTML(ep.feed_title || "")}</span> · ${timeAgo(ep.published_at)}${ep.duration ? ` · ${_fmtHours(_durSeconds(ep.duration))}` : ""}${resumable ? " · in progress" : ""}
+        </div>
+      </div>
+      <button class="btn btn-ghost btn-sm btn-icon ep-play-btn" data-action="catchup-play" data-ep-id="${ep.id}"
+              title="${resumable ? "Resume, then continue down the list" : "Play, then continue down the list"}">
+        ${svg(resumable ? Player.resumeIcon() : Player.playIcon())}
+      </button>
+    </div>`;
+}
+
+// Play the built-in playlist, optionally from a given episode. The server
+// owns the queue, so auto-advance (window._autoPlayNext → /api/player/next)
+// just works.
+window._catchupPlay = function (epId) {
+  const pl = window._catchupPlaylist;
+  if (!pl) { Toast.info("The Get Caught Up playlist is missing."); return; }
+  window._playPlaylist(pl.id, epId || null);
+};
+window._catchupEdit = function () {
+  const pl = window._catchupPlaylist;
+  if (pl) window._showPlaylistEditor(pl, () => viewDashboard());
+};
+
+// ============================================================
 // Dashboard view
 // ============================================================
 async function viewDashboard() {
   window._onSyncIdle = viewDashboard;
 
-  const [status, feeds, _recentRaw, continueEps, suggestions] = await Promise.all([
+  // "Get Caught Up" is the built-in smart playlist; the card simply shows it.
+  const playlists = await API.getPlaylists().catch(() => []);
+  const catchupPl = playlists.find((p) => p.is_system) || null;
+  window._catchupPlaylist = catchupPl;
+  const [status, feeds, catchup, continueEps, suggestions] = await Promise.all([
     API.getStatus(),
     API.getFeeds(),
-    API.getEpisodes({ status: "downloaded", limit: 20 }),
+    catchupPl ? API.getPlaylistEpisodes(catchupPl.id).catch(() => []) : Promise.resolve([]),
     API.continueListening(5),
     API.getSuggestions(),
   ]);
-  const recentDL = _recentRaw
-    .slice()
-    .sort((a, b) => new Date(b.published_at || 0) - new Date(a.published_at || 0))
-    .slice(0, 5);
 
   const content = document.getElementById("content");
   content.innerHTML = `
@@ -269,28 +375,8 @@ async function viewDashboard() {
         </div>
       </div>` : ""}
 
-      <div class="card" id="newest-episodes-card" style="margin-bottom:12px">
-        <div class="card-body">
-          <div class="section-title">Newest Episodes</div>
-          ${recentDL.length === 0
-            ? `<div class="empty-state" style="padding:24px 16px">
-                <div class="empty-state-title" style="font-size:13px">No downloads yet</div>
-              </div>`
-            : recentDL.map((ep) => `
-              <div class="activity-item" style="cursor:pointer"
-                   data-action="navigate" data-path="/feeds/${ep.feed_id}" data-ep-scroll="${ep.id}">
-                <div class="activity-icon">
-                  ${_thumb(ep.custom_image_url || ep.episode_image_url || ep.feed_image_url)}
-                </div>
-                <div class="activity-info">
-                  <div class="activity-title truncate">${escHTML(ep.title || "Untitled")}</div>
-                  <div class="activity-sub">
-                    <span class="feed-link" data-action="navigate" data-path="/feeds/${ep.feed_id}">${escHTML(ep.feed_title || "")}</span> · ${timeAgo(ep.published_at)}${ep.file_size ? ` · ${fmtBytes(ep.file_size)}` : ""}
-                  </div>
-                </div>
-                ${epPlayBtn(ep)}
-              </div>`).join("")}
-        </div>
+      <div class="card" id="catchup-card" style="margin-bottom:12px">
+        <div class="card-body">${_catchupCardBody(catchupPl, catchup)}</div>
       </div>
 
       ${(() => {
@@ -372,6 +458,10 @@ async function viewDashboard() {
     </div>`;
 
   wireSyncAllBtn("#btn-sync-all-dash");
+
+  // Get Caught Up drops an episode the moment it is marked played (by hand or
+  // by the player finishing it) and picks one back up when it is un-marked.
+  window._onEpisodePlayedChanged = () => _catchupRefresh();
 
   // Keep Continue Listening in sync with the player while this view is rendered
   window._onPlayerEpisodeStarted = (ep) => {

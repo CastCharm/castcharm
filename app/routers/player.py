@@ -72,7 +72,10 @@ def _smart_start(context_type: str, context_id: int, context_filter: str, db: Se
     if in_progress:
         return max(in_progress, key=lambda ep: ep.last_played_at or datetime.min)
     unplayed = [ep for ep in episodes if not ep.played]
-    in_order = context_type == "feed" and _feed_play_order(context_id, db) == "oldest"
+    # A playlist's own order is the order: Play starts at its first unplayed
+    # item (smart lists sort themselves; manual lists are hand-ordered).
+    in_order = context_type == "playlist" or (
+        context_type == "feed" and _feed_play_order(context_id, db) == "oldest")
     if unplayed:
         return unplayed[0] if in_order else unplayed[-1]
     return episodes[0] if in_order else episodes[-1]
@@ -116,7 +119,8 @@ def _step(state: PlayerState, db: Session, direction: int) -> PlayerStateOut:
             state.updated_at = datetime.utcnow()
             db.commit()
         return _build_state_out(state, db)
-    full = get_queue(state.context_type, state.context_id, "all", db) if state.context_type == "feed" else queue
+    full = (get_queue(state.context_type, state.context_id, "all", db)
+            if state.context_type in ("feed", "playlist") else queue)
     queue_ids = {ep.id for ep in queue}
     full_ids = [ep.id for ep in full]
 
