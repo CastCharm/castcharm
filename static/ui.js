@@ -308,6 +308,8 @@ document.addEventListener("click", (e) => {
   if (action === "select-theme")   { selectTheme(el.dataset.theme); return; }
   if (action === "autoclean-now")  { _runAutocleanNow(); return; }
   if (action === "notify-test")    { _notifySendTest(); return; }
+  if (action === "catchup-play")   { e.stopPropagation(); _catchupPlay(el.dataset.epId ? Number(el.dataset.epId) : null); return; }
+  if (action === "catchup-edit")   { _catchupEdit(); return; }
   if (action === "notify-clear")   { _notifyClearField(el.dataset.field); return; }
   if (action === "sec-update-credentials") { _secUpdateCredentials(); return; }
   if (action === "sec-disable-auth")       { _secDisableAuth(); return; }

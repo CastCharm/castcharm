@@ -220,6 +220,7 @@ async function viewSettings() {
             ${toggle("Listen to new podcasts in chronological order", "default_play_order_oldest",
               (settings.default_play_order || "oldest") === "oldest",
               "How Play behaves on any podcast you haven't set individually. On: start at the oldest episode and continue in order, like a story. Off: start with the newest episode. Each podcast can override this in its own settings.")}
+            <div class="form-hint" style="margin-top:4px">The Home page's <strong>Get Caught Up</strong> list is a built-in smart playlist. Change what it gathers, such as the number of days, under <a href="#/playlists" data-action="navigate" data-path="/playlists">Playlists</a>.</div>
           </div>
         </div>
 

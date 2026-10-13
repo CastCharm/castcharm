@@ -41,6 +41,7 @@ window.playEpisode = async function (epId, rewindOnResume = false, opts = {}) {
       ]);
       ep = await API.getEpisode(epId);
       if (typeof updateEpisodeRow === "function") updateEpisodeRow(ep);
+      window._onEpisodePlayedChanged?.(epId, false);
     }
     // A feed that is listened to in order keeps going after this episode,
     // wherever the tap came from (feed page, Continue Listening, search).
@@ -65,6 +66,7 @@ window.toggleEpPlayed = async function (epId) {
     const ep = await API.togglePlayed(epId);
     if (!ep.played) { await API.updateProgress(epId, 0); ep.play_position_seconds = 0; }
     if (typeof updateEpisodeRow === "function") updateEpisodeRow(ep);
+    window._onEpisodePlayedChanged?.(epId, ep.played);
     Toast.info(ep.played ? "Marked as played" : "Marked as unplayed");
     updateStatus();
   } catch (e) { Toast.error(e.message); }

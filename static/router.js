@@ -38,6 +38,7 @@ const Router = {
         // the view and keep firing against a host that is no longer in the page.
         if (typeof VList !== "undefined") VList.destroyAll();
         window._onSyncIdle     = null;
+        window._onEpisodePlayedChanged = null;
         window._onDownloadIdle = null;
         window._onStatusPoll   = null;
         const content = document.getElementById("content");

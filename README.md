@@ -196,4 +196,5 @@ MIT — see [LICENSE](LICENSE).
 
 ## AI Disclosure
 
-Generative AI is being used for some aspects of development. All generated code is human-reviewed, human-modified where improvements can be made, and tested by humans.
+Generative AI is being used for some aspects of development. All generated code is human-reviewed, human-modified where improvements can be made, and tested by humans. This also helps me work a little bit more slowly and methodically — if I have to manually review all code, it means that I'm not burning through 500,000 tokens/day. After all, I'm an impoverished academic, I'm not made of tokens!
+If you wish to become a contributor, I have no major objections to genAI being a part of how you get there. My own golden rule applies: if I can't figure out what your code does, I won't merge it. However clever the thing that wrote it, human or otherwise, I can only evaluate what I can understand.

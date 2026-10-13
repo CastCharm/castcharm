@@ -253,10 +253,16 @@ class Playlist(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
-    # 'feed' playlists are computed live; 'custom' playlists use PlaylistEpisode rows
-    type = Column(String, nullable=False)          # 'feed' | 'custom'
-    feed_id = Column(Integer, ForeignKey("feeds.id", ondelete="CASCADE"), nullable=True)
-    filter = Column(String, default="unplayed")    # 'all' | 'unplayed' (feed playlists only)
+    # 'custom' (shown as "Manual") playlists use PlaylistEpisode rows; 'smart'
+    # playlists are computed live from `rules` (JSON, see schemas.SmartRules).
+    # The kind is chosen at creation and never changes.  The old 'feed' kind was
+    # migrated into 'smart' (a single "podcast is" condition).
+    type = Column(String, nullable=False)          # 'custom' | 'smart'
+    feed_id = Column(Integer, ForeignKey("feeds.id", ondelete="CASCADE"), nullable=True)   # legacy
+    filter = Column(String, default="unplayed")    # legacy ('all' | 'unplayed')
+    rules = Column(Text, nullable=True)            # JSON, smart playlists only
+    # Built-in playlists ("Catch up") cannot be deleted or renamed; rules can change.
+    is_system = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     episodes = relationship("PlaylistEpisode", back_populates="playlist",

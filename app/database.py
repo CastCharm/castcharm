@@ -138,6 +138,8 @@ def _migrate_db():
         ("global_settings", "notify_url",                    "VARCHAR"),
         ("global_settings", "notify_token",                  "VARCHAR"),
         ("global_settings", "public_url",                    "VARCHAR"),
+        ("playlists",       "rules",                         "TEXT"),
+        ("playlists",       "is_system",                     "BOOLEAN DEFAULT 0"),
     ]
     new_tables = [
         """CREATE TABLE IF NOT EXISTS playlists (
@@ -186,6 +188,19 @@ def _migrate_db():
             if column not in existing:
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}"))
                 conn.commit()
+
+        # Playlists of the old 'feed' kind become smart playlists with one
+        # "podcast is" condition, so nothing a user set up is lost and there are
+        # exactly two kinds from here on: manual ('custom') and 'smart'.
+        import json as _json
+        for pid, feed_id, filt in conn.execute(
+                text("SELECT id, feed_id, filter FROM playlists WHERE type = 'feed'")).all():
+            rules = {"sort": "oldest", "played": "unplayed" if (filt or "unplayed") == "unplayed" else "any"}
+            if feed_id is not None:
+                rules["feeds"] = {"mode": "include", "ids": [int(feed_id)]}
+            conn.execute(text("UPDATE playlists SET type = 'smart', rules = :r WHERE id = :id"),
+                         {"r": _json.dumps(rules), "id": pid})
+        conn.commit()
 
         # Indexes introduced after initial schema — IF NOT EXISTS makes these idempotent.
         #
