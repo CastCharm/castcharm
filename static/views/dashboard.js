@@ -207,10 +207,10 @@ function _catchupCardBody(pl, eps) {
           <div class="empty-state-title" style="font-size:13px">You're all caught up!</div>
           <div class="empty-state-desc" style="max-width:none">${pl ? `You don't have any episodes that match the following criteria:<br><span style="color:var(--text-2)">${escHTML(_describeRules(pl.rules))}</span>` : "The built-in Get Caught Up playlist is missing; restart the server to recreate it."}</div>
         </div>`
-      : `${eps.slice(0, 8).map(_catchupRow).join("")}
-         ${eps.length > 8 ? `<details class="catchup-more">
-           <summary class="activity-sub" style="cursor:pointer;padding:8px 0">Show ${eps.length - 8} more</summary>
-           ${eps.slice(8).map(_catchupRow).join("")}
+      : `${eps.slice(0, 5).map(_catchupRow).join("")}
+         ${eps.length > 5 ? `<details class="catchup-more">
+           <summary class="activity-sub" style="cursor:pointer;padding:8px 0">Show ${eps.length - 5} more</summary>
+           ${eps.slice(5).map(_catchupRow).join("")}
          </details>` : ""}`}`;
 }
 
